@@ -2,6 +2,8 @@
 -- model shrunk to 1/1000 size.
 -- Emptying the groups instead (version 1) made the engine drop the light altogether, as if
 -- the light type were None: no phases in the window, no BASE_NODE_TRAFFIC_LIGHT (2026-10-16).
+-- (A test that also put sign models at the light poles was removed, 2026-10-18: a light type's
+-- model script can't tell which approaches yield. Signs are placed by the Priority Road tool.)
 local trafficlightutil = require "::/infrastructure/traffic_light/trafficlightutil.lua"
 
 local SCALE = 0.001

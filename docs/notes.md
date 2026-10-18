@@ -16,7 +16,7 @@ Results (paired runs, details in the lab's `docs/studies/2026-10-15_traffic-mana
 - **Priority Road tool** (`content/gui/construction/tools/imsvale_priority_road_tool.script.lua`, added 2026-10-16):
   - **Following the road:** hover a road, and the tool follows it through junctions in both directions, always on to the straightest connected road (at most 45° off).
   - **Roundabout or road:** if that comes back to the start it's a loop, and a round loop (all samples within 12% of the mean radius) is a roundabout. Otherwise it's a priority road. The rules are the same either way; the distinction is for entry signs later.
-  - **Phases at each junction:** #1 traffic from the priority road green, 60 s, 0 s minimum, skipping allowed (it ends as soon as the priority road is empty and someone waits). #2 side roads green, 5 s, same.
+  - **Phases at each junction:** #1 traffic from the priority road green, 60 s, 0 s minimum, skipping allowed (it ends as soon as the priority road is empty and someone waits). #2 side roads green, plus the exits (priority road onto a side road), 1 s, same.
     - The side phase needs the short cap: skipping only ends a phase early when its own lanes empty, and a long side queue never empties, so 60 s there would hold the priority road for a minute (run B: the entry phase always ran its full 6 s with 150+ cars queued).
     - #3, only with crosswalks: pedestrians.
   - **Junctions with no side road leading in** (exits only) get no light.
@@ -24,11 +24,15 @@ Results (paired runs, details in the lab's `docs/studies/2026-10-15_traffic-mana
   - **Not handled:** the engine's precedence flags. Auto can give a town-road spoke (610) right of way over a native roundabout's one-way ring (410/430), so the road you click is always the priority road.
 
 - `content/infrastructure/traffic_light/imsvale_yield_invisible.trl.lua` ("Yield (invisible)"): type A's standard light layout with every model shrunk to 1/1000. A type that places no models at all makes the engine drop the light, as if the type were None.
-- `content/gui/imsvale_yield/`: Copy / Paste in the traffic light window. It is a `react-replacement-config` wrapping the window's exported recipe, `DoubleSlipSwitchContent` from `gui/entity_window/double_slip_switch.tl`. Paste maps the roads by rotation, the lane connections by road pair and node-relative lane numbers, and the crosswalks through their road.
+- Copy / Paste in the traffic light window started here and moved to its own mod, `../traffic-light-copy` (2026-10-17).
 
-## Compatibility
+## Multi-lane rings: a heads-up from Roadcraft
 
-The lab mod (`imsvale_smart_traffic_lights`) has the same pieces under other names. With both enabled you get two invisible light types, and one Copy / Paste row: replacements are applied in order and the last one wins. Use one or the other.
+Roadcraft refuses the test roundabout (2026-10-17 log) at node 940:
+- **Their rule:** on a multi-lane ring they only let entry lanes join the curb lane (their "outer": outside of the ring by radius, the rightmost lane with right-hand traffic).
+- **The problem there:** the ring has three lanes there, and the two-lane entry 12301 has lane 2 connected only to the median lane (`12301:2 -> 652:1`; outbound lane numbers count from the median side, so `652:3` is the curb lane). Their rule would strand that lane.
+- **For us now:** we don't rewrite lane connections, so it doesn't apply.
+- **For later:** if we adopt multi-lane handling (curb lane must exit, the other lanes stay green during the entry phase), a two-lane entry must keep a lane to go to. Either let it feed more than the curb lane, keeping those lanes red during the entry phase, or rewrite its lanes onto the outer lane instead of dropping them.
 
 ## Prior art: Roadcraft: Priority roundabouts (mod.io 6443728, by ueberleitung)
 
@@ -38,8 +42,8 @@ What it does that we don't:
 - **One-click tool for a whole roundabout:** it detects a closed one-way loop, applies to every junction on it, and removes again. The original junction settings are journalled in game-script state, so removal restores them (phases remapped if roads were replaced).
 - **Phase presets:** ring phase 60, 2, 5, 10 or 20 s; entry phase 1, 3 or 5 s; an extra pedestrian phase where there are crosswalks.
 - **Multi-lane rings:**
-  - It rewrites lane connections: at exits the outer lane must leave; at entries the ring moves inward, so the entry joins a free outer lane.
-  - Inner-lane through traffic stays green during the entry phase, so only the lane the entry merges into stops.
+  - It rewrites lane connections: at exits the curb lane must leave; at entries the ring moves toward the median, so the entry joins a free curb lane.
+  - Through traffic in the lanes nearer the median stays green during the entry phase, so only the lane the entry merges into stops.
 - **Signs:** real models (yield sign plus German 215 / 209 / 214 lane signs). A light model script only knows its position, not which approach is the entry, so the mod pre-generates one light type per combination of entrance compass sectors (32 sectors, ~1,000 types) and hides them from the light-type list in `postRunFn` (`trafficLightTypeRep.setVisible(id, false)`).
 - **Hidden lights:** it keeps one invisible model (`inner_blocker.mdl`) per light group plus the signs. It found the same thing we did: emptying the groups loses the light.
 - **Ring protection:** `roadDevelopmentLocked` and an invisible edge decoration with `preventParcels` stop towns building inside the ring or rebuilding the ring roads.
@@ -52,13 +56,43 @@ What we have that it doesn't:
 - **Node Swatter:** removing the ring's corner nodes, where lane changes otherwise pile up.
 - **Measured results** (paired runs).
 
-Worth borrowing:
-- Keeping the inner lanes green on multi-lane rings, and the exit / entry lane rewrites.
+Problems it addresses that we may need to solve too. These are not things to copy: work out our own solution from the base game and the API docs (user, 2026-10-18).
+- Keeping the median-side lanes green on multi-lane rings, and the exit / entry lane rewrites.
 - Restoring the original settings on removal.
 - Hiding helper light types in `postRunFn`.
 - Development lock and parcel blocker for the ring.
 
+## Sign placement (2026-10-18)
+
+How the Priority Road tool places signs, what the user saw in game, and what is still open. The aim is to work everything out from the roads involved and hard-code as little as possible.
+
+**Rule (priority road 14):**
+- **Which sign:** a yield sign on each yielding approach; on a roundabout, the combined sign (yield triangle on top, round blue roundabout sign below). No priority diamonds at junctions.
+- **Along the road:** `SIGN_BACK` = 0.5 m back from the junction edge. The junction edge is where the approach's lane curves end, which already moves out with a bigger junction (a wider crossing / priority road).
+- **Across the road:** on the right of the incoming traffic (right-hand traffic), past the curb. The curb is the outer edge of the outermost lane that isn't for pedestrians (driving lanes, and shoulders without transport modes as on highways). The sign stands 0.5 m past the curb on a raised sidewalk, otherwise 1.0 m.
+- **Facing:** the oncoming traffic.
+
+**Observed in game:**
+- **16 m town road** (2 × 3 m raised sidewalks, 10 m of driving lanes), with priority road 13: well placed sideways (5.5 m from the centre). Along the road it stood 2-3 m too far back. In reality it would stand right before a crosswalk that sits as close to the junction as it can, so `SIGN_BACK` went from 3 m to 0.5 m. Still to check: whether that lands it before the crosswalk.
+- **Roundabout entry, 4-lane two-way country road** (country_new_medium: 2 m level pedestrian strips, then 5 + 4 m driving lanes each side) into a 2-lane ring, with priority road 13: about 2 m too far out. The cause: there is no raised sidewalk, so the old rule put the sign 1 m outside the whole 22 m road (12 m out). The curb (the driving lanes' edge) is at 9 m. The new rule gives 10 m.
+- **Roundabout entries along a noise barrier:** the sign ends up inside the barrier.
+
+**Open:**
+1. **Crosswalks:** read where the junction's crosswalks are and put the sign just before them, instead of a fixed distance from the junction edge. Needs a way to find a crosswalk's position (`BASE_NODE_CONFIG.crosswalks` lists the crosswalk entities).
+2. **The crossing road's size:** the user expects it to matter most at the entry. Check whether the junction edge already captures it well enough, across small and large crossings.
+3. **Pedestrian lanes on built roads:** the tool recognises them by their `PERSON` transport mode, trying the enum value, its name and 0, since the stored form isn't documented. Its log line per sign ("curb … m from the centre") shows what it read; on the country road it should say 9 m.
+4. **Asymmetric roads** (one-way roads, roads with different sides): the curb is taken as symmetric about the centre line. The right-hand side's actual lanes are better.
+5. **Left-hand traffic:** the sign side and the roundabout sign's arrows assume right-hand traffic.
+6. **Noise barriers and other things beside the road:** options the user named: a sign mounted on the barrier, hiding the barrier's last section, or a gantry.
+7. **Multi-lane approaches and one-way entries:** a second sign on the left (median) side may be expected; one-way roads would need one there.
+8. **Priority diamonds:** maybe at intervals along a priority road, never on roundabouts.
+
 ## Ideas
+
+- **Lane configuration as part of the setup** (to do, user 2026-10-17):
+  - Applying priority / yield also sets the lane connections, roundabouts first. The rules are general for any lane combination, or hard-coded per combination; tested on different combinations later.
+  - The phases must match: every lane connection green in some phase. Otherwise cars choose a lane for a turn its connections allow, never get a green, and are stranded.
+  - Lanes and phases go in one proposal.
 
 - Yield sign models: a light type whose models are yield signs instead of shrunk lights. The engine needs some models to keep the light; whether signs work as "light" models (no red/green animation) is untested.
 - A "Make yield" button in the light window: phase #1 green for the connections with `precedence=true`, phase #2 for the rest. The engine already says who should have right of way, so it would work at any junction, not just roundabouts.

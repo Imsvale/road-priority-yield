@@ -1,0 +1,188 @@
+"""Blender -> Transport Fever 3 model exporter (runs inside Blender, e.g. through the Blender MCP:
+exec(open(r"<this file>").read()) with CONFIG set first, or edit the defaults below).
+
+Writes, for the mesh objects of one collection:
+- <content>/models/mesh/<name>/<name>.msh + .msh.blob  (one mesh, a submesh per material)
+- <content>/models/model/<name>/<name>.mdl             (one LOD, one node)
+- <content>/models/material/<name>/<mtl>.mtl           (from MATERIALS below)
+
+Format (2026-10-18): the layout was read off existing mesh files and checked byte for byte
+(blob size against the .msh offsets), then confirmed by our own exports loading and showing
+correctly in game:
+- blob: float32 arrays one after another, positions (xyz), normals (xyz), uv0 (uv),
+  tangents (xyzw, w = bitangent sign); then uint32 triangle indices per submesh. Little-endian.
+- .msh: byte offsets / byte counts into the blob; each submesh's indices for every attribute
+  point at the same index range (one vertex per triangle corner, so no sharing).
+- matConfigs = {{0, 1, ...}}: submesh i uses material i of the model node's material list.
+- Z up (Blender's too). UVs: v is flipped (v' = 1 - v). The game samples with v = 0 at the top of
+  the image (DDS rows top first), Blender has v = 0 at the bottom; unflipped, the yield face came
+  out upside down in game (2026-10-18).
+- Base-game meshes are compressed (counts don't match byte lengths) and carry no materials in
+  the .msh; the uncompressed form above loads fine.
+
+Each Blender material names its TF3 material with a custom property "tf3_mtl" (file name).
+"""
+import bpy
+import bmesh
+import os
+import struct
+
+DEFAULTS = {
+    "collection": "TF3 Yield Sign",
+    "name": "imsvale_yield_sign",
+    "mod_id": "imsvale_road_priority_yield",
+    "content": r"C:\Users\imsvale\source\Transport Fever 3\mods\road-priority-yield\mod\content",
+    "visible_to": 500,
+    # Textures shared by all sign models, in textures/models/<texture_dir>/.
+    "texture_dir": "imsvale_signs",
+    # .mtl definitions by file name: albedo texture (in textures/models/<texture_dir>/) and wrap mode.
+    "materials": {
+        "yield_face.mtl": {"albedo": "yield_face.dds", "wrap": "CLAMP_TO_EDGE"},
+        "yield_no_face.mtl": {"albedo": "yield_no_face.dds", "wrap": "CLAMP_TO_EDGE"},
+        "roundabout_face.mtl": {"albedo": "roundabout_face.dds", "wrap": "CLAMP_TO_EDGE"},
+        "priority_face.mtl": {"albedo": "priority_face.dds", "wrap": "CLAMP_TO_EDGE"},
+        "sign_metal.mtl": {"albedo": "sign_metal.dds", "wrap": "REPEAT"},
+    },
+    # Neutral base-game maps for the rest of PHYSICAL_NRML_MAP.
+    "mga": "::/assets/shared/mat/tex/default_metal_gloss_ao.dds",
+    "normal": "::/placeholders/mat/tex/default_normal_map.dds",
+}
+CONFIG = dict(DEFAULTS, **globals().get("CONFIG", {}))
+
+
+def lua_num(x):
+    s = "%.6f" % x
+    s = s.rstrip("0").rstrip(".")
+    return "0" if s in ("-0", "") else s
+
+
+def collect(cfg):
+    """Triangle corners per TF3 material: lists of (pos, normal, uv, tangent4)."""
+    coll = bpy.data.collections[cfg["collection"]]
+    dg = bpy.context.evaluated_depsgraph_get()
+    groups = {}
+    order = []
+    # By name, up front: creating / removing the temporary meshes below invalidates the live
+    # all_objects list mid-loop (an object came back as None, 2026-10-18).
+    names = [o.name for o in coll.all_objects if o.type == "MESH" and not o.hide_render]
+    for obname in names:
+        ob = bpy.data.objects[obname]
+        ev = ob.evaluated_get(dg)
+        me = ev.to_mesh()
+        bm = bmesh.new()
+        bm.from_mesh(me)
+        bmesh.ops.triangulate(bm, faces=bm.faces[:])
+        tmp = bpy.data.meshes.new("_tf3_export_tmp")
+        bm.to_mesh(tmp)
+        bm.free()
+        ev.to_mesh_clear()
+        tmp.transform(ob.matrix_world)
+        if ob.matrix_world.determinant() < 0:
+            tmp.flip_normals()
+        if not tmp.uv_layers:
+            tmp.uv_layers.new(name="UVMap")
+        tmp.calc_tangents(uvmap=tmp.uv_layers[0].name)
+        uv = tmp.uv_layers[0].data
+        mats = ob.data.materials
+        for poly in tmp.polygons:
+            mat = mats[poly.material_index] if poly.material_index < len(mats) else None
+            mtl = mat.get("tf3_mtl") if mat else None
+            if not mtl:
+                raise RuntimeError("object %s: material %s has no tf3_mtl" % (ob.name, mat.name if mat else None))
+            if mtl not in groups:
+                groups[mtl] = []
+                order.append(mtl)
+            for li in poly.loop_indices:
+                loop = tmp.loops[li]
+                v = tmp.vertices[loop.vertex_index]
+                u, vv = uv[li].uv
+                groups[mtl].append((
+                    tuple(v.co), tuple(loop.normal), (u, 1.0 - vv),
+                    tuple(loop.tangent) + (loop.bitangent_sign,),
+                ))
+        bpy.data.meshes.remove(tmp)
+    return order, groups
+
+
+def write_mesh(cfg, order, groups):
+    name, mod = cfg["name"], cfg["mod_id"]
+    corners = [c for m in order for c in groups[m]]
+    pos = b"".join(struct.pack("<3f", *c[0]) for c in corners)
+    nrm = b"".join(struct.pack("<3f", *c[1]) for c in corners)
+    uv0 = b"".join(struct.pack("<2f", *c[2]) for c in corners)
+    tan = b"".join(struct.pack("<4f", *c[3]) for c in corners)
+    blob = bytearray()
+    attr = {}
+    for key, data, n in (("position", pos, 3), ("normal", nrm, 3), ("uv0", uv0, 2), ("tangent", tan, 4)):
+        attr[key] = (len(blob), len(data), n)
+        blob += data
+    subs = []
+    first = 0
+    for m in order:
+        k = len(groups[m])
+        idx = struct.pack("<%dI" % k, *range(first, first + k))
+        subs.append((len(blob), len(idx), m))
+        blob += idx
+        first += k
+
+    def mtl_path(m):
+        return "%s::/models/material/%s/%s" % (mod, name, m)
+
+    va = ",".join("%s={offset=%d,count=%d,numComp=%d}" % (k, o, c, n) for k, (o, c, n) in attr.items())
+    sm = ",".join(
+        "{indices={%s},materials={\"%s\"}}" % (
+            ",".join("%s={offset=%d,count=%d}" % (k, o, c) for k in attr), mtl_path(m))
+        for o, c, m in subs)
+    msh = "function data()return {matConfigs={{%s}},vertexAttr={%s},subMeshes={%s}}end\n" % (
+        ",".join(str(i) for i in range(len(order))), va, sm)
+    d = os.path.join(cfg["content"], "models", "mesh", name)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, name + ".msh"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(msh)
+    with open(os.path.join(d, name + ".msh.blob"), "wb") as f:
+        f.write(blob)
+
+    lo = [min(c[0][i] for c in corners) for i in range(3)]
+    hi = [max(c[0][i] for c in corners) for i in range(3)]
+    mats = ",".join("\"%s\"" % mtl_path(m) for m in order)
+    ident = "{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}"
+    # collider NONE: the sign is placed as a construction right beside the road, which a box
+    # collider would refuse (base-game models use type "NONE" too, e.g. brewery stock configs).
+    mdl = ("function data()return {boundingInfo={bbMax={%s},bbMin={%s}},collider={type=\"NONE\"},"
+           "lods={{node={children={{materials={%s},mesh=\"%s::/models/mesh/%s/%s.msh\",name=\"%s\",transf=%s}},"
+           "name=\"RootNode\",transf=%s},static=false,visibleFrom=0,visibleTo=%s}},metadata={},version=2}end\n") % (
+        ",".join(lua_num(x) for x in hi), ",".join(lua_num(x) for x in lo), mats, mod, name, name, name, ident, ident,
+        lua_num(cfg["visible_to"]))
+    d = os.path.join(cfg["content"], "models", "model", name)
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, name + ".mdl"), "w", encoding="utf-8", newline="\n") as f:
+        f.write(mdl)
+    return {"corners": len(corners), "submeshes": [(m, len(groups[m]) // 3) for m in order],
+            "blob_bytes": len(blob), "bbMin": lo, "bbMax": hi}
+
+
+def write_materials(cfg, order):
+    name, mod = cfg["name"], cfg["mod_id"]
+    d = os.path.join(cfg["content"], "models", "material", name)
+    os.makedirs(d, exist_ok=True)
+    for m in order:
+        spec = cfg["materials"][m]
+        albedo = "%s::/textures/models/%s/%s" % (mod, cfg["texture_dir"], spec["albedo"])
+        text = ("function data()\nreturn {order=0,type=\"PHYSICAL_NRML_MAP\",params={\n"
+                " map_albedo={fragmentSamplers={albedoTex={fileName=\"%s\",type=\"TWOD\",wrapS=\"%s\",wrapT=\"%s\","
+                "magFilter=\"LINEAR\",minFilter=\"LINEAR_MIPMAP_LINEAR\",compressionAllowed=false,scaleDownAllowed=false}}},\n"
+                " map_metal_gloss_ao={fragmentSamplers={metalGlossAoTex={fileName=\"%s\",type=\"TWOD\"}}},\n"
+                " map_normal={fragmentSamplers={normalTex={fileName=\"%s\",type=\"TWOD\"}}},\n"
+                " normal_scale={fragmentProperties={{normalScale=1}}},\n"
+                " albedo_scale={fragmentProperties={{albedoScale={1,1,1}}}},\n"
+                " two_sided={fragmentProperties={{twoSided=false,flipNormal=false}}},\n"
+                " light_receiver={fragmentProperties={{lightMask=2,isLegacyMaterial=false,disableShadowMapWrite=false,lightMaxDistanceScale=1}}},\n"
+                "}}\nend\n") % (albedo, spec["wrap"], spec["wrap"], cfg["mga"], cfg["normal"])
+        with open(os.path.join(d, m), "w", encoding="utf-8", newline="\n") as f:
+            f.write(text)
+
+
+order, groups = collect(CONFIG)
+info = write_mesh(CONFIG, order, groups)
+write_materials(CONFIG, order)
+result = {"exported": CONFIG["name"], **info}

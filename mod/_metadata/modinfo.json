@@ -1,8 +1,15 @@
 {
-    "name": "Yield",
+    "name": "Road Priority & Yield",
     "summary": "Priority roads and roundabouts where side traffic actually yields. One click.",
-    "description": "Cars in Transport Fever 3 never yield: at a roundabout entering cars cut in and the ring backs up, and side roads push into main roads.\nPriority Road (Roads > tools): click a road or a roundabout. The tool follows it through its junctions and makes every side road yield to it, using invisible traffic lights: the priority road stays green while it has traffic, side roads go when there is a gap. In a paired test on a roundabout, stopping on the ring dropped by 96% and the ring no longer broke down. Click again to remove.\nAlso: an invisible traffic light type for your own setups, and Copy / Paste buttons in the traffic light window.\nYield, give way, priority, roundabout, right of way.",
-    "authors": [{ "name": "imsvale", "role": "CREATOR" }],
-    "tags": ["Script Mod"],
+    "description": "Cars in Transport Fever 3 never yield: at a roundabout entering cars cut in and the ring backs up, and side roads push into main roads.\nPriority Road (Roads > tools): click a road or a roundabout. The tool follows it through its junctions and makes every side road yield to it, using invisible traffic lights: the priority road stays green while it has traffic, side roads go when there is a gap. In a paired test on a roundabout, stopping on the ring dropped by 96% and the ring no longer broke down. Click again to remove.\nAlso: an invisible traffic light type for your own setups.\nYield, give way, priority, roundabout, right of way.",
+    "authors": [
+        {
+            "name": "imsvale",
+            "role": "CREATOR"
+        }
+    ],
+    "tags": [
+        "Script Mod"
+    ],
     "url": ""
 }
