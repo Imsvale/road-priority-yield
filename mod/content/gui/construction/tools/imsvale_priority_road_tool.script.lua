@@ -52,21 +52,12 @@ local color_util = ug_require "::/gui/main/color_util.tl"
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 22 (roundabout lane rules)"
+local VERSION = "priority road 38 (settings on hidden tabs read from their last seen values)"
 local CT = api.type.ComponentType
 
--- Phase plans: one for roundabouts, one for everything else (user, 2026-10-19). Maxima in
--- seconds; every phase has a 0 s minimum and may be skipped.
--- - priority: phase #1; it ends early when the priority road is empty;
--- - yield: phase #2; short, or a long side queue would hold the priority road (1 s: user, 2026-10-17);
--- - pedestrian: phase #3, only where there are crosswalks;
--- - exitsInYield: exits (priority road onto a side road) also green in phase #2;
--- - lanes: the lane rule "Overwrite lanes" applies ("roundabout": roundaboutLanes; "junction":
---   rewriteLanes, with "Dedicated turn lanes").
-local PLANS = {
-	roundabout = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = true, lanes = "roundabout" },
-	junction = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = false, lanes = "junction" },
-}
+-- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
+local phases = ug_require "/scripts/imsvale_yield_phases.lua"
+local PLANS = phases.PLANS
 local MAX_TURN = 45            -- degrees: how far the priority road may bend at a junction
 local ROUND_TOLERANCE = 0.12   -- a loop is a roundabout if every sample is within 12 % of the mean radius
 local MAX_SEGMENTS = 400       -- stop following a road after this many segments
@@ -78,6 +69,8 @@ local ICON_BACK = 6.0          -- metres back from the junction edge along the a
 local ICON_LIFT = 1.5          -- metres above the road
 local ICON_SIZE = 32           -- pixels at ICON_REF_DISTANCE from the camera
 local ICON_REF_DISTANCE = 150  -- metres
+local ICON_TAPER = 0.5         -- how fast icons shrink with distance: size ~ (ICON_REF_DISTANCE / distance) ^ this
+                               -- (1 shrank them too fast; 0.5 is half the rate on a log scale, user 2026-10-19)
 local ICON_MIN_SIZE = 14       -- pixels
 local ICON_MAX_SIZE = 48       -- pixels
 local RANGE_MIN = 250          -- metres from the camera's centre (horizontally) where icons always show
@@ -91,6 +84,18 @@ local ICONS = {
 	yield = "imsvale_road_priority_yield::/gui/yield.tga",
 	remove = "imsvale_road_priority_yield::/gui/remove-x.tga", -- drawn over an icon that goes away ("x" style)
 }
+-- Icons per sign style, where a style has its own (made from the user's artwork by
+-- tools/make_gui_icons.py); anything missing falls back to ICONS (international).
+local STYLE_ICONS = {
+	no = { yield = "imsvale_road_priority_yield::/gui/yield-no.tga" },
+}
+local function iconFor(kind, style)
+	return (STYLE_ICONS[style] or {})[kind] or ICONS[kind]
+end
+-- The sign style the icons show: set every step by the tool from its setting, read every step by
+-- the overlay, so a change shows at once (it was only passed in when the action was rebuilt,
+-- which a setting change doesn't do; 2026-10-19). GUI module state.
+local iconStyle = "intl"
 -- How an icon that goes away is marked: "highlight" = the bulldozer's look (a box of translucent
 -- gold with a stronger gold outline, in the game's own Bulldozer colour), "x" = ICONS.remove on top.
 local REMOVAL_STYLE = "highlight"
@@ -271,47 +276,11 @@ local function invisibleType()
 	return nil
 end
 
--- Phases for one junction, or nil and why not.
--- `conns`: the lane connections the phases are for (default: the junction's own).
-local function junctionStates(node, a, b, cfg, round, conns)
-	local p = round and PLANS.roundabout or PLANS.junction
-	local priority = { [a] = true, [b] = true }
-	conns = conns or cfg.laneConnections
-	local nConn = #conns
-	local nCross = #cfg.crosswalks
-	local sideIn, sideSegs = 0, {}
-	for _, c in ipairs(conns) do
-		if not priority[c.segment0] then sideIn = sideIn + 1 sideSegs[c.segment0] = true end
-	end
-	if sideIn == 0 then return nil, "no side road leads in", sideSegs end
-	local function phase(duration, green)
-		local st = api.type.TrafficLightState.new()
-		local locked = {}
-		for i, c in ipairs(conns) do
-			if not green(c, nil) then locked[#locked + 1] = i - 1 end
-		end
-		for i = 1, nCross do
-			if not green(nil, i) then locked[#locked + 1] = nConn + i - 1 end
-		end
-		st.lockedLanes = locked
-		st.duration = duration
-		st.minDuration = 0
-		st.canSkip = true
-		return st
-	end
-	local states = {
-		phase(p.priority, function(c) return c and priority[c.segment0] end),
-		phase(p.yield, function(c)
-			return c and (not priority[c.segment0] or (p.exitsInYield and not priority[c.segment1]))
-		end),
-	}
-	if nCross > 0 then
-		states[#states + 1] = phase(p.pedestrian, function(c, cross) return cross ~= nil end)
-	end
-	return states, nil, sideSegs
-end
+local junctionStates = phases.junctionStates -- (node, a, b, cfg, round, conns)
 
 -- Everything the hovered segment leads to: the priority road, its junctions, what yields.
+local chainOf -- (plan): the road's segments in order and its nodes; defined with the priority signs
+
 local function planFrom(seg)
 	if not isEdge(seg) then return nil, "not a road" end
 	local e = api.engine.getComponent(seg, CT.BASE_EDGE)
@@ -320,13 +289,16 @@ local function planFrom(seg)
 	local segs, nodes = { seg }, {}
 	for _, s in ipairs(fwdSegs) do segs[#segs + 1] = s end
 	for _, n in ipairs(fwdNodes) do nodes[#nodes + 1] = n end
+	local backSegs = {}
 	if not loop then
-		local backSegs, backNodes = walk(seg, e.node0, nil, visited)
+		local backNodes
+		backSegs, backNodes = walk(seg, e.node0, nil, visited)
 		for _, s in ipairs(backSegs) do segs[#segs + 1] = s end
 		for _, n in ipairs(backNodes) do nodes[#nodes + 1] = n end
 	end
 
-	local plan = { segs = segs, loop = loop, junctions = {}, skipped = 0, applied = 0, entries = 0, yieldSegs = {}, icons = {} }
+	local plan = { segs = segs, loop = loop, junctions = {}, skipped = 0, applied = 0, ours = 0, entries = 0, yieldSegs = {}, icons = {},
+		seg0 = seg, fwdSegs = fwdSegs, backSegs = loop and {} or backSegs }
 	if loop and #segs >= 3 then
 		plan.round, plan.radius, plan.roundness = roundness(segs)
 	end
@@ -353,6 +325,10 @@ local function planFrom(seg)
 				local leadsIn = {}
 				for _, c in ipairs(cfg.laneConnections) do leadsIn[c.segment0] = true end
 				j.old = has and configuredRoles(cfg) or {}
+				-- This road is the priority road here (not a side road of another one).
+				j.ours = has and (j.old[n.a] == "priority" or j.old[n.b] == "priority")
+					and j.old[n.a] ~= "yield" and j.old[n.b] ~= "yield"
+				if j.ours then plan.ours = plan.ours + 1 end
 				j.new = {}
 				if states then
 					if leadsIn[n.a] then j.new[n.a] = "priority" end
@@ -362,7 +338,93 @@ local function planFrom(seg)
 			end
 		end
 	end
-	plan.remove = plan.applied > 0 and plan.applied == plan.entries
+	-- Remove first, extend after (user, 2026-10-19), decided by the hovered segment itself.
+	-- Priority belongs to a junction approach (traffic arriving at a yielding junction on a
+	-- segment), so it's directional: a link (the road between two junctions, across plain nodes)
+	-- can be a priority approach at one end and yield at the other (a T where the road ends, or a
+	-- crossing where another priority road has the junction). Membership of the priority road is
+	-- worked out from the junctions, not stored: a link belongs to it if it's a priority approach
+	-- at one of our junctions (the tool's light, this road through it) at either of its ends.
+	-- Stored marks went stale with road type changes, crossings re-applied by another road and the
+	-- player's own light edits (user's review, 2026-10-19).
+	-- - The hovered segment's link belongs: the click removes the stretch of links connected
+	--   through our junctions around it, up to the first junction that isn't ours, and our
+	--   junctions on it.
+	-- - It doesn't: the click applies to the whole road.
+	local chainSegs, chainNodes = chainOf(plan)
+	local n = #chainSegs
+	local byNode = {}
+	for _, j in ipairs(plan.junctions) do byNode[j.node] = j end
+	-- A loop starts at one of its junctions, so no link runs across where it closes.
+	if plan.loop then
+		local r = nil
+		for i = 1, n do if byNode[chainNodes[i]] then r = r or i end end
+		if r and r > 1 then
+			local segs2, nodes2 = {}, {}
+			for i = 1, n do
+				segs2[i] = chainSegs[(r - 1 + i - 1) % n + 1]
+				nodes2[i] = chainNodes[(r - 1 + i - 1) % n + 1]
+			end
+			nodes2[n + 1] = nodes2[1]
+			chainSegs, chainNodes = segs2, nodes2
+		end
+	end
+	-- Links: runs of segments between junction nodes (chainNodes[i] is between segments i-1 and i).
+	local linkOf, links = {}, {}
+	local current = nil
+	for i = 1, n do
+		if current == nil or byNode[chainNodes[i]] then
+			current = { first = i, last = i, startNode = chainNodes[i] }
+			links[#links + 1] = current
+		end
+		current.last = i
+		current.endNode = chainNodes[i + 1]
+		linkOf[i] = #links
+	end
+	-- Is link k a priority approach at our junction at node `node`, through segment `seg`?
+	local function priorityAt(node, seg)
+		local j = byNode[node]
+		return j ~= nil and j.ours and j.old[seg] == "priority"
+	end
+	local function belongs(k)
+		local l = links[k]
+		return priorityAt(l.startNode, chainSegs[l.first]) or priorityAt(l.endNode, chainSegs[l.last])
+	end
+	local hoveredIdx = nil
+	for i, x in ipairs(chainSegs) do if x == seg then hoveredIdx = i end end
+	plan.remove = hoveredIdx ~= nil and belongs(linkOf[hoveredIdx])
+	if plan.remove then
+		-- Grow from the hovered link through our junctions.
+		local inStretch = { [linkOf[hoveredIdx]] = true }
+		local function grow(k, step)
+			for _ = 1, #links do
+				local l = links[k]
+				local node = step > 0 and l.endNode or l.startNode
+				local j = byNode[node]
+				if not (j and j.ours) then return end
+				k = k + step
+				if k > #links then if plan.loop then k = 1 else return end end
+				if k < 1 then if plan.loop then k = #links else return end end
+				if inStretch[k] then return end
+				inStretch[k] = true
+			end
+		end
+		grow(linkOf[hoveredIdx], 1)
+		grow(linkOf[hoveredIdx], -1)
+		local stretch, list = {}, {}
+		for i = 1, n do
+			if inStretch[linkOf[i]] then
+				stretch[chainSegs[i]] = true
+				list[#list + 1] = chainSegs[i]
+			end
+		end
+		plan.removeSegs = list
+		plan.ours = 0
+		for _, j in ipairs(plan.junctions) do
+			j.removeHere = (j.ours and (stretch[j.a] or stretch[j.b])) and true or false
+			if j.removeHere then plan.ours = plan.ours + 1 end
+		end
+	end
 
 	-- Icons: removing crosses out what's there; applying shows the new roles, and where a
 	-- configured junction's role changes, the old icon crossed out to the left of the new one.
@@ -377,7 +439,7 @@ local function planFrom(seg)
 	for _, j in ipairs(plan.junctions) do
 		plan.nodes[j.node] = true
 		if plan.remove or not j.states then
-			for s, kind in pairs(j.old) do icon(j, s, kind, plan.remove) end
+			for s, kind in pairs(j.old) do icon(j, s, kind, plan.remove and j.removeHere) end
 		else
 			local segsHere = {}
 			for s in pairs(j.old) do segsHere[s] = true end
@@ -496,8 +558,12 @@ local function rewriteLanes(node, cfg, dedicated)
 end
 
 -- Roundabout lanes (user's rules, 2026-10-19), at a ring junction with one side road. Ring lanes
--- counted from the curb (the outside of the ring), right-hand traffic:
--- - The side road's outbound lanes take as many ring lanes, curb first, one to one: those exit.
+-- counted from the curb (the outside of the ring), right-hand traffic. Exits by `exitStyle`
+-- (the "Roundabout exit" setting):
+-- - "A" (default): only the curb lane exits, into every outbound lane of the side road. It spreads
+--   traffic better over the ring lanes: on a 3-lane ring, one lane per exit, where with two lanes
+--   exiting the next lanes (the middle one most) were underused (user, 2026-10-19).
+-- - "B": the side road's outbound lanes take as many ring lanes, curb first, one to one: those exit.
 -- - Exiting lanes don't go on along the ring, except the leftmost exiting lane: no lane goes on
 --   to the right of an exiting lane.
 -- - Going on, a lane steps one lane to the right (towards the exits); the median lane also keeps
@@ -509,7 +575,7 @@ end
 -- - A one-lane ring: its lane exits and goes on. No exit at this junction: lane to lane.
 -- Returns the new connections, or nil when the junction isn't one ring in, one ring out, one side
 -- road.
-local function roundaboutLanes(node, cfg, a, b)
+local function roundaboutLanes(node, cfg, a, b, exitStyle)
 	local old = cfg.laneConnections -- copies
 	local ringIn, ringOut
 	for _, c in ipairs(old) do
@@ -555,8 +621,16 @@ local function roundaboutLanes(node, cfg, a, b)
 	end
 	local n, nOut = #ringInL, #ringOutL
 	local function ringLane(i) return ringOutL[math.max(1, math.min(i, nOut))] end
-	local m = math.min(#spokeOutL, n) -- ring lanes that exit
-	for i = 1, m do add(ringIn, ringInL[i], spoke, spokeOutL[i]) end
+	local m -- ring lanes that exit
+	if exitStyle == "B" then
+		m = math.min(#spokeOutL, n)
+		for i = 1, m do add(ringIn, ringInL[i], spoke, spokeOutL[i]) end
+	else
+		m = math.min(#spokeOutL, 1)
+		if m == 1 then
+			for _, l in ipairs(spokeOutL) do add(ringIn, ringInL[1], spoke, l) end
+		end
+	end
 	if n == 1 then
 		add(ringIn, ringInL[1], ringOut, ringLane(1))
 	elseif m == 0 then
@@ -616,8 +690,9 @@ local function send(node, tl, preference, done)
 end
 
 -- Apply (or remove) at every junction; `done(okCount, failCount)` once all have answered.
--- `lanes`: { overwrite = bool, dedicated = bool } from the tool's settings.
-local function apply(plan, done, lanes)
+-- `lanes`: { overwrite = bool, dedicated = bool } from the tool's settings. `onJob(job, success)`
+-- after each junction (job: node, a, b, round, remove).
+local function apply(plan, done, lanes, onJob)
 	local pending, ok, failed = 0, 0, 0
 	local function answered(success)
 		if success then ok = ok + 1 else failed = failed + 1 end
@@ -628,23 +703,24 @@ local function apply(plan, done, lanes)
 	for _, j in ipairs(plan.junctions) do
 		local cfg = api.engine.getComponent(j.node, CT.BASE_NODE_CONFIG)
 		if plan.remove then
-			if j.has then
+			if j.removeHere then
 				local tl = cfg.trafficLightConfig:clone()
 				tl.states = {}
-				jobs[#jobs + 1] = { node = j.node, tl = tl, pref = api.type.enum.TrafficLightPreference.NO }
+				jobs[#jobs + 1] = { node = j.node, tl = tl, pref = api.type.enum.TrafficLightPreference.NO, remove = true }
 			end
 		elseif j.states then
 			local tl = cfg.trafficLightConfig:clone()
 			tl.states = j.states
 			tl.trafficLightType = plan.typeId
-			local job = { node = j.node, tl = tl, pref = api.type.enum.TrafficLightPreference.YES }
+			local job = { node = j.node, tl = tl, pref = api.type.enum.TrafficLightPreference.YES,
+				a = j.a, b = j.b, round = plan.round or false, typeId = plan.typeId }
 			local planHere = plan.round and PLANS.roundabout or PLANS.junction
 			local conns = nil
 			if lanes and lanes.overwrite then
 				if planHere.lanes == "junction" then
 					conns = rewriteLanes(j.node, cfg, lanes.dedicated)
 				elseif planHere.lanes == "roundabout" then
-					conns = roundaboutLanes(j.node, cfg, j.a, j.b)
+					conns = roundaboutLanes(j.node, cfg, j.a, j.b, lanes.exitStyle)
 					if not conns then log("node %d: roundabout lanes left as they are", j.node) end
 				end
 			end
@@ -661,11 +737,18 @@ local function apply(plan, done, lanes)
 	if #jobs == 0 then return done(0, 0) end
 	pending = #jobs
 	for _, job in ipairs(jobs) do
+		local function finished(success)
+			if onJob then
+				local ok, e = pcall(onJob, job, success)
+				if not ok then log("node %d: %s", job.node, tostring(e)) end
+			end
+			answered(success)
+		end
 		local sent, err
 		if job.conns then
-			sent, err = pcall(sendNodeConfig, job.node, job.cfg, job.conns, job.tl, answered)
+			sent, err = pcall(sendNodeConfig, job.node, job.cfg, job.conns, job.tl, finished)
 		else
-			sent, err = pcall(send, job.node, job.tl, job.pref, answered)
+			sent, err = pcall(send, job.node, job.tl, job.pref, finished)
 		end
 		if not sent then
 			log("node %d: %s", job.node, tostring(err))
@@ -689,12 +772,26 @@ end
 -- index of the chosen entry (the game's getParamDefaultValue returns defaultIndex as is). Changing
 -- it while the tool is open restyles every junction's signs (restyleAll).
 local SIGN_STYLE_PARAM = "imsvaleSignStyle"
--- Lane settings (see the header): Yes / No buttons (Button, Horizontal: the game's segmented
--- buttons, as the lane tool's "Symmetry"; a drop-down is for long or many values, like the sign
--- style), default No, read 1-based: 1 = Yes. Opt-in (user, 2026-10-19): a player who doesn't look
--- at the settings never loses their own lane work.
+-- Lane settings (see the header): checkboxes (a Yes / No setting is most compact as a checkbox,
+-- user 2026-10-19), unticked by default: read 1 = unticked, 2 = ticked. Opt-in (user,
+-- 2026-10-19): a player who doesn't look at the settings never loses their own lane work.
 local LANE_PARAM = "imsvaleOverwriteLanes"
 local DEDICATED_PARAM = "imsvaleDedicatedTurnLanes"
+local FOLLOW_PARAM = "imsvaleFollowLaneEdits" -- checkbox, as the lane settings
+-- Tabs (user, 2026-10-19), as the game's road tool switches its panel with icon buttons at the
+-- top: SECTION_PARAM picks General / Roundabouts / Priority signs, and every other parameter is
+-- shown only under its tab (checkEnabledFn returning "Hidden", as the game's street builder
+-- hides parameters by mode, construction_react_util.tl).
+local SECTION_PARAM = "imsvaleSection"
+local SECTIONS = { general = 1, roundabout = 2, priority = 3 }
+local function inSection(section)
+	return function(values)
+		return (values[SECTION_PARAM] or 1) == SECTIONS[section] and "Enabled" or "Hidden"
+	end
+end
+-- "Roundabout exit": Style A (default) / Style B, see roundaboutLanes. The tooltips name the
+-- right lane: with left-hand traffic support they must say "left" instead.
+local EXIT_PARAM = "imsvaleRoundaboutExit"
 local SIGN_STYLES = { "intl", "no" }          -- by parameter index; "no": Norwegian, tighter corners
 local SIGN_BACK = 0.5          -- metres back from the junction edge along the approach (3 m stood
                                -- 2-3 m too far back on a 16 m town road, 2026-10-18)
@@ -735,6 +832,31 @@ end
 local function storeSigns(node, ids, style, round)
 	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME,
 		{ node = node, signs = ids, style = style, round = round or false }))
+end
+
+-- "Follow lane edits" (experimental): the game script keeps the junctions this tool applied
+-- yielding to, with a fingerprint of their lanes, and when the switch is on rebuilds a
+-- junction's phases after its lanes change. The switch's value lives in the game script's state
+-- (saved with the game): the tool sends it when it changes, and on every apply.
+-- All messages go on the signs event with a `kind`: a save keeps the game script's subscriptions
+-- from the version it was saved with, and the game script only subscribes when it has none, so
+-- an event added later would never arrive in older saves (the diamonds didn't, 2026-10-19).
+
+local function registerJunction(job)
+	local param
+	if job.remove then
+		param = { node = job.node, remove = true }
+	else
+		local cfg = api.engine.getComponent(job.node, CT.BASE_NODE_CONFIG)
+		param = { node = job.node, a = job.a, b = job.b, round = job.round, typeId = job.typeId,
+			fp = phases.fingerprint(cfg) }
+	end
+	param.kind = "junction"
+	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, param))
+end
+
+local function sendFollow(on)
+	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, { kind = "follow", on = on }))
 end
 
 local function signFile(style, round)
@@ -796,25 +918,22 @@ local function signTransf(seg, node)
 	return api.type.Mat4f.rotZTransl(angle, api.type.Vec3f.new(x, y, edge.z))
 end
 
--- Build signs for the given approaches of one junction; done(asset ids).
-local function placeSigns(node, segs, file, done)
+-- Build sign constructions `file` at the given transforms, in one proposal; done(asset ids).
+-- `label` names them in the log.
+local function placeAt(transfs, file, name, label, done)
 	local con = signCon(file)
-	if not con or #segs == 0 then return done({}) end
+	if not con or #transfs == 0 then return done({}) end
 	local proposal = api.type.SimpleProposal.new()
 	local list = {}
-	for _, seg in ipairs(segs) do
-		local t = signTransf(seg, node)
-		if t then
-			local ce = api.type.SimpleProposal.ConstructionEntity.new()
-			ce.fileName = con
-			ce.transf = t
-			ce.params = { seed = 0 }
-			ce.name = "Yield sign"
-			ce.playerEntity = api.engine.util.getPlayer()
-			list[#list + 1] = ce
-		end
+	for _, t in ipairs(transfs) do
+		local ce = api.type.SimpleProposal.ConstructionEntity.new()
+		ce.fileName = con
+		ce.transf = t
+		ce.params = { seed = 0 }
+		ce.name = name
+		ce.playerEntity = api.engine.util.getPlayer()
+		list[#list + 1] = ce
 	end
-	if #list == 0 then return done({}) end
 	proposal.constructionsToAdd = list
 	-- As the player would build it first; refused (e.g. a collision with something by the road),
 	-- again with ignoreErrors, as the game's mission code builds its constructions.
@@ -826,11 +945,21 @@ local function placeSigns(node, segs, file, done)
 				local ent = type(r) == "table" and r[1] or r
 				if api.engine.getComponent(ent, CT.ASSET_GROUP) then ids[#ids + 1] = ent end
 			end
-			if not success then log("node %d: signs refused", node) end
+			if not success then log("%s: signs refused", label) end
 			done(ids)
 		end)
 	end
 	send(false)
+end
+
+-- Build signs for the given approaches of one junction; done(asset ids).
+local function placeSigns(node, segs, file, done)
+	local transfs = {}
+	for _, seg in ipairs(segs) do
+		local t = signTransf(seg, node)
+		if t then transfs[#transfs + 1] = t end
+	end
+	placeAt(transfs, file, "Yield sign", "node " .. node, done)
 end
 
 -- Remove sign assets by id, in one proposal: the full api.type.Proposal's `toRemove` list takes
@@ -857,7 +986,7 @@ local function updateSigns(plan, style)
 		local key = tostring(j.node)
 		local old = stored[key]
 		if plan.remove then
-			if j.has and old then
+			if j.removeHere and old then
 				removeSigns(old.ids)
 				storeSigns(j.node, {})
 			end
@@ -902,6 +1031,330 @@ local function restyleAll(style)
 		end
 	end
 	log("sign style %s: restyled %d junctions", style, count)
+end
+
+---------------------------------------------------------------------------
+-- Priority signs along priority roads (2026-10-19, rules agreed with the user)
+---------------------------------------------------------------------------
+-- Diamonds (imsvale_priority_sign.con) on the right of each direction of travel, facing it, just
+-- past the curb as the yield signs. Distances along the road, across plain nodes:
+-- Distances between junction edges (see diamondPlaces), not node centres.
+-- - start: where the priority road begins (each end, for traffic driving onto it), DIAMOND_START
+--   in; if the first junction comes sooner than DIAMOND_START_HALF, halfway to it;
+-- - repeat: DIAMOND_REPEAT (+- DIAMOND_JITTER, fixed per junction from its id) after every
+--   junction, unless the next junction ahead is closer than DIAMOND_MIN_GAP (the sign would stand
+--   right before it): a run of close junctions gets one sign, after its last junction. A gap
+--   shorter than twice DIAMOND_REPEAT gets its sign halfway, without jitter (user, 2026-10-19).
+-- Not on roundabouts. No end-of-priority signs: the game has no right-hand rule to return to.
+-- Stored per node in the game script, apart from the yield signs (the style switch leaves them
+-- alone): repeats under their junction, start signs under the road's end node.
+local DIAMOND_FILE = "imsvale_priority_sign.con"
+local DIAMOND_START = 60.0       -- metres in from the start of the priority road
+local DIAMOND_START_HALF = 60.0  -- a first junction closer than this: the start sign goes halfway
+local DIAMOND_REPEAT = 60.0      -- metres after a junction
+local DIAMOND_JITTER = 2.0       -- +- metres, fixed per junction
+local DIAMOND_MIN_GAP = 60.0     -- metres to the next junction for a repeat to be placed
+local DIAMOND_STEP = 2.0         -- metres between samples of the road's curve
+
+-- Priority sign settings: sliders under the tool's Priority signs tab (user, 2026-10-19; they were
+-- in a window of their own first, see ../docs/GUI.md). The DIAMOND_* values above are the
+-- defaults. Panel values are GUI session state: they last while the game runs, not with a save
+-- (a tool can't set its panel values, so a saved value couldn't be shown). The tool reads them
+-- every step into panelDiamonds; placement reads that. A change that has settled rebuilds every
+-- road's signs (DIAMOND_REBUILD_STEPS).
+local DIAMOND_SETTINGS = {
+	{ key = "start", name = "First sign", default = DIAMOND_START, min = 0, max = 200, step = 5 },
+	{ key = "startHalf", name = "Place at halfway point if segment is shorter than", default = DIAMOND_START_HALF, min = 0, max = 300, step = 5 },
+	{ key = "repeatAt", name = "Subsequent signs", default = DIAMOND_REPEAT, min = 10, max = 200, step = 5 },
+	{ key = "jitter", name = "Variation", default = DIAMOND_JITTER, min = 0, max = 20, step = 1 },
+	{ key = "minGap", name = "Minimum segment length", default = DIAMOND_MIN_GAP, min = 0, max = 300, step = 5 },
+}
+for _, d in ipairs(DIAMOND_SETTINGS) do d.param = "imsvaleDiamond_" .. d.key end
+local DIAMOND_REBUILD_STEPS = 90 -- GUI steps a changed setting must stay put before signs are rebuilt (~1.5 s)
+
+local panelDiamonds = nil -- the sliders' values, read by the tool every step (GUI module state)
+
+local function diamondSettings()
+	local out = {}
+	for _, d in ipairs(DIAMOND_SETTINGS) do
+		out[d.key] = panelDiamonds and tonumber(panelDiamonds[d.key]) or d.default
+	end
+	return out
+end
+
+-- The sliders, for getDefinition: numbers from min to max by step, default at the nearest number.
+local function diamondParams()
+	local out = {}
+	for _, d in ipairs(DIAMOND_SETTINGS) do
+		local numbers, default, best = {}, 1, math.huge
+		for v = d.min, d.max, d.step do
+			numbers[#numbers + 1] = v + 0.0
+			if math.abs(v - d.default) < best then best, default = math.abs(v - d.default), #numbers end
+		end
+		out[#out + 1] = {
+			group = d.param,
+			key = d.param,
+			name = d.name,
+			numbers = numbers,
+			defaultIndex = default,
+			resetOnCategoryChange = false,
+			uiType = api.type.enum.ScriptParamType.Slider,
+			yearFrom = 0,
+			yearTo = 0,
+			location = api.type.enum.ScriptParamLocation.Default,
+			preserveValueInAllCategories = true,
+			checkEnabledFn = inSection("priority"),
+			formatValueFn = function(v) return (d.key == "jitter" and "± " or "") .. math.floor(v + 0.5) .. " m" end,
+		}
+	end
+	return out
+end
+
+local function storedDiamonds()
+	local ok, d = pcall(function()
+		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(SIGN_GAME_SCRIPT)
+		local comp = entity and api.engine.getComponent(entity, CT.GAME_SCRIPT)
+		local state = comp and comp.state
+		return type(state) == "table" and state.diamonds or nil
+	end)
+	return ok and type(d) == "table" and d or {}
+end
+
+local function storeDiamonds(node, ids)
+	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME,
+		{ kind = "diamonds", node = node, ids = ids }))
+end
+
+-- The priority road's segments in order from one end to the other, and the nodes between them
+-- (#nodes = #segs + 1; on a loop the last node is the first).
+function chainOf(plan) -- assigns the local declared before planFrom
+	local segs = {}
+	for i = #plan.backSegs, 1, -1 do segs[#segs + 1] = plan.backSegs[i] end
+	segs[#segs + 1] = plan.seg0
+	for _, s in ipairs(plan.fwdSegs) do segs[#segs + 1] = s end
+	local function ends(seg)
+		local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+		return e.node0, e.node1
+	end
+	local a0, a1 = ends(segs[1])
+	local start = a0
+	if #segs > 1 then
+		local b0, b1 = ends(segs[2])
+		start = (a0 == b0 or a0 == b1) and a1 or a0
+	end
+	local nodes, cur = { start }, start
+	for i, seg in ipairs(segs) do
+		local n0, n1 = ends(seg)
+		cur = (n0 == cur) and n1 or n0
+		nodes[i + 1] = cur
+	end
+	return segs, nodes
+end
+
+-- Samples along the chain: { x, y, z, s (metres from the start), seg }, and each node's s.
+local function sampleChain(segs, nodes)
+	local pts, nodeS = {}, { 0 }
+	local total = 0
+	for i, seg in ipairs(segs) do
+		local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+		local forward = e.node0 == nodes[i]
+		local len = e.distance and e.distance > 0 and e.distance
+			or math.sqrt((e.position1.x - e.position0.x) ^ 2 + (e.position1.y - e.position0.y) ^ 2)
+		local n = math.max(2, math.ceil(len / DIAMOND_STEP))
+		local prev = nil
+		for k = 0, n do
+			local u = k / n
+			local t = forward and u or 1 - u
+			local q = hermite(e.position0, e.position1, e.tangent0, e.tangent1, t)
+			local z = e.position0.z + (e.position1.z - e.position0.z) * t
+			if prev then total = total + math.sqrt((q.x - prev.x) ^ 2 + (q.y - prev.y) ^ 2) end
+			if k > 0 or i == 1 then pts[#pts + 1] = { x = q.x, y = q.y, z = z, s = total, seg = seg } end
+			prev = q
+		end
+		nodeS[i + 1] = total
+	end
+	return pts, nodeS, total
+end
+
+-- Position and unit direction (towards increasing s) at s, and the segment there.
+local function pointAt(pts, s)
+	for k = 2, #pts do
+		if pts[k].s >= s or k == #pts then
+			local a, b = pts[k - 1], pts[k]
+			local span = math.max(b.s - a.s, 1e-6)
+			local f = math.max(0, math.min(1, (s - a.s) / span))
+			local dx, dy = b.x - a.x, b.y - a.y
+			local l = math.max(math.sqrt(dx * dx + dy * dy), 1e-6)
+			return { x = a.x + dx * f, y = a.y + dy * f, z = a.z + (b.z - a.z) * f }, { x = dx / l, y = dy / l }, b.seg
+		end
+	end
+	return nil
+end
+
+-- A sign at s for traffic heading dir (+1: increasing s, -1: decreasing): on that traffic's
+-- right just past the curb, facing it (the model's face is its -Y).
+local function diamondTransf(pts, s, dir)
+	local p, t, seg = pointAt(pts, s)
+	if not p then return nil end
+	local h = { x = t.x * dir, y = t.y * dir }
+	local outer, raised = curb(api.engine.getComponent(seg, CT.BASE_EDGE).laneConfigs)
+	local lateral = outer + (raised and CLEAR_RAISED or CLEAR_LEVEL)
+	local x, y = p.x + h.y * lateral, p.y - h.x * lateral
+	local angle = (math.atan2 or math.atan)(-h.x, h.y)
+	return api.type.Mat4f.rotZTransl(angle, api.type.Vec3f.new(x, y, p.z))
+end
+
+-- Where the diamonds go: { ["node:segment"] = { { s, dir }, ... } }, keyed by the node they
+-- hang on and the road segment they stand beside (the one leaving that node in their direction),
+-- so two priority roads crossing at a node keep their signs apart. Also every such key along
+-- the road (for clearing it).
+local function diamondPlaces(plan)
+	local cfg = diamondSettings()
+	local jitter = math.floor(cfg.jitter + 0.5)
+	local segs, nodes = chainOf(plan)
+	local pts, nodeS, L = sampleChain(segs, nodes)
+	local loop = plan.loop
+	-- Distances go between junction edges, where the segments' lanes end and the junction's paved
+	-- area begins, not between node centres: the visible road between two junctions (user,
+	-- 2026-10-19). reach: how far a junction extends into a segment from its node.
+	local function reach(seg, node)
+		local ok, d = pcall(function()
+			local p = junctionEdge(seg, node)
+			local np = api.engine.getComponent(node, CT.BASE_NODE).position
+			return p and math.sqrt((p.x - np.x) ^ 2 + (p.y - np.y) ^ 2) or 0
+		end)
+		return ok and d or 0
+	end
+	local function isJunction(node)
+		return #api.engine.system.streetSystem.getNodeStreetSegments(node) >= 3
+	end
+	-- Junctions along the chain: { s (node), sIn / sOut (its edges along the road), node, i }.
+	local js = {}
+	local function junctionAt(i)
+		local segIn = segs[i - 1] or segs[#segs]
+		js[#js + 1] = { s = nodeS[i], node = nodes[i], i = i,
+			sIn = nodeS[i] - reach(segIn, nodes[i]), sOut = nodeS[i] + reach(segs[i], nodes[i]) }
+	end
+	if loop and isJunction(nodes[1]) then junctionAt(1) end
+	for i = 2, #nodes - 1 do
+		if isJunction(nodes[i]) then junctionAt(i) end
+	end
+	-- Where the road itself begins and ends: a junction's edge, or the node at a dead end.
+	local startS = (not loop and isJunction(nodes[1])) and reach(segs[1], nodes[1]) or 0
+	local endS = (not loop and isJunction(nodes[#nodes])) and L - reach(segs[#segs], nodes[#nodes]) or L
+	local places = {}
+	-- The segment leaving node i in direction dir.
+	local function segFrom(i, dir)
+		if dir > 0 then return segs[i] end
+		return segs[i - 1] or segs[#segs]
+	end
+	local function add(i, s, dir)
+		if loop then s = s % L end
+		if s > 0 and s < L then
+			local key = nodes[i] .. ":" .. segFrom(i, dir)
+			places[key] = places[key] or {}
+			table.insert(places[key], { s = s, dir = dir })
+		end
+	end
+	local keys = {}
+	for i, seg in ipairs(segs) do
+		keys[#keys + 1] = nodes[i] .. ":" .. seg
+		keys[#keys + 1] = nodes[i + 1] .. ":" .. seg
+	end
+	local function offset(node)
+		return cfg.repeatAt + (node % (2 * jitter + 1)) - jitter
+	end
+	if not loop then
+		local first, lastJ = js[1], js[#js]
+		local toFirst = (first and first.sIn or endS) - startS
+		add(1, startS + ((first and toFirst < cfg.startHalf) and toFirst / 2 or cfg.start), 1)
+		local fromLast = endS - (lastJ and lastJ.sOut or startS)
+		add(#nodes, endS - ((lastJ and fromLast < cfg.startHalf) and fromLast / 2 or cfg.start), -1)
+	end
+	for k, j in ipairs(js) do
+		-- Distance from the junction's edge: DIAMOND_REPEAT (+- jitter), or halfway on a short gap.
+		local function from(gap) return gap < 2 * cfg.repeatAt and gap / 2 or offset(j.node) end
+		local nextIn = js[k + 1] and js[k + 1].sIn or (loop and js[1].sIn + L) or endS
+		local ahead = nextIn - j.sOut
+		if ahead >= cfg.minGap then add(j.i, j.sOut + from(ahead), 1) end
+		local prevOut = js[k - 1] and js[k - 1].sOut or (loop and js[#js].sOut - L) or startS
+		local behind = j.sIn - prevOut
+		if behind >= cfg.minGap then add(j.i, j.sIn - from(behind), -1) end
+	end
+	return places, pts, nodes, keys
+end
+
+-- After the lights: the road's diamonds follow its yielding. The road's own diamonds (keys of
+-- its nodes and segments) go; on applying, new ones are placed. Entries stored per node only
+-- (priority road 25-26) are cleared for every node of the road.
+local function updateDiamonds(plan)
+	if plan.round then return end
+	local stored = storedDiamonds()
+	local places, pts, nodes, keys = diamondPlaces(plan)
+	local clear = {}
+	if plan.remove then
+		-- Only the removed stretch: its segments' keys, and per-node entries of its nodes.
+		local removed, nodeSet = {}, {}
+		for _, x in ipairs(plan.removeSegs or {}) do
+			removed[tostring(x)] = true
+			local e = api.engine.getComponent(x, CT.BASE_EDGE)
+			if e then nodeSet[e.node0] = true nodeSet[e.node1] = true end
+		end
+		for _, key in ipairs(keys) do
+			if removed[key:match(":(.*)$") or ""] then clear[#clear + 1] = key end
+		end
+		for node in pairs(nodeSet) do clear[#clear + 1] = tostring(node) end
+	else
+		for _, key in ipairs(keys) do clear[#clear + 1] = key end
+		for _, node in ipairs(nodes) do clear[#clear + 1] = tostring(node) end
+	end
+	for _, key in ipairs(clear) do
+		local old = stored[key]
+		if type(old) == "table" and #old > 0 then
+			removeSigns(old)
+			storeDiamonds(key, {})
+			stored[key] = nil
+		end
+	end
+	if plan.remove then return end
+	local count = 0
+	for key, list in pairs(places) do
+		local transfs = {}
+		for _, place in ipairs(list) do
+			local t = diamondTransf(pts, place.s, place.dir)
+			if t then transfs[#transfs + 1] = t end
+		end
+		count = count + #transfs
+		placeAt(transfs, DIAMOND_FILE, "Priority sign", "diamonds at " .. key, function(ids)
+			storeDiamonds(key, ids)
+		end)
+	end
+	log("priority signs: %d", count)
+end
+
+-- Place every road's priority signs again with the current settings (the settings window's
+-- Rebuild). Roads are found through the stored signs: each key's segment gives the road (planFrom),
+-- each road once. A road still yielding gets new signs; one whose yielding is gone only loses its
+-- leftover signs.
+local function rebuildAllDiamonds()
+	local done, roads = {}, 0
+	for key in pairs(storedDiamonds()) do
+		local seg = tonumber(tostring(key):match(":(%d+)$") or "")
+		if seg and not done[seg] and isEdge(seg) then
+			local ok, plan = pcall(planFrom, seg)
+			if ok and plan and not plan.round then
+				for _, x in ipairs(plan.segs) do done[x] = true end
+				local applied = false
+				for _, j in ipairs(plan.junctions) do if j.ours then applied = true end end
+				plan.remove = not applied
+				plan.removeSegs = plan.segs
+				local dOk, err = pcall(updateDiamonds, plan)
+				if not dOk then log("rebuild at segment %d: %s", seg, tostring(err)) end
+				roads = roads + 1
+			end
+		end
+	end
+	log("priority signs rebuilt on %d roads", roads)
 end
 
 ---------------------------------------------------------------------------
@@ -978,14 +1431,14 @@ end
 --   collapsed at the left edge and the icons piled up there (2026-10-17).
 -- - Every element is mouse-transparent (meta.mouseTransparent; react.setMouseTransparent only
 --   covers the recipe's own component): hovering an image made the tool flicker (2026-10-17).
--- - Size falls with the distance from the camera (ICON_SIZE at ICON_REF_DISTANCE, clamped).
+-- - Size falls with the distance from the camera (ICON_SIZE at ICON_REF_DISTANCE, ICON_TAPER, clamped).
 --   Icons further from the camera's centre than the range (which grows with the camera's
 --   height) are hidden, and fade out before that, so close in the horizon stays clear.
 -- - An icon that goes away gets a second element at the same place, drawn on top: the
 --   bulldozer-style highlight box, or ICONS.remove (REMOVAL_STYLE).
 -- - Re-projected every step, so the icons follow the camera.
 -- param: planIcons (the hovered road's preview), planNodes (its junctions, whose configured
--- icons the preview replaces).
+-- icons the preview replaces). The sign style comes from iconStyle.
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
 	react.setMouseTransparent(true)
 
@@ -1011,7 +1464,7 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 			if horizontal <= range then
 				local z = ic.z + ICON_LIFT
 				local dist = math.sqrt((ic.x - eye.x) ^ 2 + (ic.y - eye.y) ^ 2 + (z - eye.z) ^ 2)
-				local scaled = ICON_SIZE * ICON_REF_DISTANCE / math.max(dist, 1)
+				local scaled = ICON_SIZE * (ICON_REF_DISTANCE / math.max(dist, 1)) ^ ICON_TAPER
 				local px = math.floor(math.max(ICON_MIN_SIZE, math.min(ICON_MAX_SIZE, scaled)) + 0.5)
 				local alpha = horizontal <= range * FADE_FROM and 1 or (range - horizontal) / (range * (1 - FADE_FROM))
 				alpha = math.floor(alpha * 20 + 0.5) / 20
@@ -1029,7 +1482,7 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	local placed = layout()
 	local key = react.useState("")
 	react.onStep(function()
-		local parts = { tostring(configured.version) }
+		local parts = { tostring(configured.version), iconStyle }
 		for _, p in ipairs(layout()) do
 			parts[#parts + 1] = string.format("%.4f,%.4f,%d,%.2f", p.x, p.y, p.size, p.alpha)
 		end
@@ -1080,7 +1533,7 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 		}
 	end
 	for i, p in ipairs(placed) do
-		image(i, "", p, ICONS[p.kind])
+		image(i, "", p, iconFor(p.kind, iconStyle))
 		if p.cross then
 			if REMOVAL_STYLE == "x" then
 				image(i, "x", p, ICONS.remove)
@@ -1093,6 +1546,21 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 end)
 
 local lastStyle = nil -- the drop-down's value last seen (GUI module state)
+-- The panel's values as last seen, per key (GUI module state). getCurrentParams() leaves out the
+-- parameters hidden by the tabs (construction.tl getCurrentValues(false)), so a setting on another
+-- tab read as missing: applying from the Roundabouts tab took "Overwrite lanes" as unticked
+-- (2026-10-19). A setting can only change while its tab shows, so its last seen value is current.
+-- After a UI reload this is empty until each tab has been shown: until then a setting counts as
+-- its default.
+local seenParams = {}
+local function panel(params)
+	pcall(function()
+		for k, v in pairs(params.getCurrentParams()) do seenParams[k] = v end
+	end)
+	return seenParams
+end
+local diamondWatch = {} -- the sliders' values last seen, and steps since they changed (GUI module state)
+local lastFollow = nil -- "Follow lane edits" last sent
 
 local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", function(params)
 	local revision = react.useState(0)
@@ -1101,14 +1569,21 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 	local function currentStyle()
 		local raw = nil
-		pcall(function() raw = params.getCurrentParams()[SIGN_STYLE_PARAM] end)
+		pcall(function() raw = panel(params)[SIGN_STYLE_PARAM] end)
 		return SIGN_STYLES[raw] or SIGN_STYLES[1], raw
 	end
 
 	local function laneSettings()
 		local cur = {}
-		pcall(function() cur = params.getCurrentParams() end)
-		return { overwrite = cur[LANE_PARAM] == 1, dedicated = cur[DEDICATED_PARAM] == 1 }
+		pcall(function() cur = panel(params) end)
+		return { overwrite = cur[LANE_PARAM] == 2, dedicated = cur[DEDICATED_PARAM] == 2,
+			exitStyle = cur[EXIT_PARAM] == 2 and "B" or "A" }
+	end
+
+	local function followSetting()
+		local on = false
+		pcall(function() on = panel(params)[FOLLOW_PARAM] == 2 end)
+		return on
 	end
 
 	-- The game opens the tool's info callout whenever a parameter in the menu's list changes
@@ -1132,12 +1607,41 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			react.fireEvent(nil, "constructionSetSuppressCallout", true)
 		end
 		if not params.isActive then return end
+		-- The priority sign sliders; a change that has settled rebuilds every road's signs.
+		local cur = {}
+		pcall(function() cur = panel(params) end)
+		local values, parts = {}, {}
+		for _, d in ipairs(DIAMOND_SETTINGS) do
+			values[d.key] = tonumber(cur[d.param]) or d.default
+			parts[#parts + 1] = tostring(values[d.key])
+		end
+		panelDiamonds = values
+		local key = table.concat(parts, ",")
+		if diamondWatch.key == nil then
+			diamondWatch.key = key
+		elseif key ~= diamondWatch.key then
+			diamondWatch.key, diamondWatch.steps = key, 0
+		elseif diamondWatch.steps then
+			diamondWatch.steps = diamondWatch.steps + 1
+			if diamondWatch.steps >= DIAMOND_REBUILD_STEPS then
+				diamondWatch.steps = nil
+				local ok, err = pcall(rebuildAllDiamonds)
+				if not ok then log("rebuild failed: %s", tostring(err)) end
+			end
+		end
 		local style = currentStyle()
 		if lastStyle ~= nil and style ~= lastStyle then
 			local ok, err = pcall(restyleAll, style)
 			if not ok then log("restyle failed: %s", tostring(err)) end
 		end
 		lastStyle = style
+		iconStyle = style
+		-- The switch as shown, sent on the first look and on every change.
+		local follow = followSetting()
+		if follow ~= lastFollow then
+			local ok, err = pcall(sendFollow, follow)
+			if ok then lastFollow = follow else log("follow lane edits: %s", tostring(err)) end
+		end
 	end)
 
 	react.setForceFocusable(true)
@@ -1168,9 +1672,10 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			local edges = {}
 			local blue = color_util.withTransparency(constructionColors.Modifier.Valid, 0.75)
 			local gold = color_util.withTransparency(constructionColors.Bulldozer, 0.75)
-			for _, s in ipairs(plan.segs) do
+			local removing = color_util.withTransparency(constructionColors.Bulldozer, 0.75)
+			for _, s in ipairs(plan.remove and (plan.removeSegs or {}) or plan.segs) do
 				local e = builtin.type.EdgeRenderable.Edge.new(segmentGeometry(s))
-				e.colors = { blue }
+				e.colors = { plan.remove and removing or blue }
 				e.width = 1.5
 				e.offsetZ = 0.5
 				e.stepSize = 2
@@ -1207,20 +1712,26 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				end
 				pending:set(true)
 				log("%s from segment %d: %s at %d junctions", p.kind, entity, p.remove and "removing" or "applying",
-					p.remove and p.applied or p.entries)
+					p.remove and p.ours or p.entries)
 				local lanes = laneSettings()
-				log("lanes: overwrite %s, dedicated %s", tostring(lanes.overwrite), tostring(lanes.dedicated))
+				log("lanes: overwrite %s, dedicated %s, roundabout exit %s", tostring(lanes.overwrite),
+					tostring(lanes.dedicated), lanes.exitStyle)
 				apply(p, function(okCount, failCount)
 					configuredChanged()
 					local style, raw = currentStyle()
 					log("sign style parameter %s -> %s", tostring(raw), style)
 					local signsOk, signsErr = pcall(updateSigns, p, style)
 					if not signsOk then log("signs failed: %s", tostring(signsErr)) end
+					local dOk, dErr = pcall(updateDiamonds, p)
+					if not dOk then log("priority signs failed: %s", tostring(dErr)) end
 					log("%s: %d ok, %d failed", p.remove and "removed" or "applied", okCount, failCount)
 					message:set(failCount > 0 and string.format("Refused at %d junctions", failCount) or nil)
 					pending:set(false)
 					revision:set(revision:old() + 1)
-				end, lanes)
+				end, lanes, function(job, success)
+					if success then registerJunction(job) end
+				end)
+				pcall(sendFollow, followSetting())
 				return true
 			end,
 			filter = function(entity)
@@ -1269,38 +1780,90 @@ local function getDefinition(constructionDefinition, _repository, _params)
 		availability = { yearFrom = 0, yearTo = 0 },
 		params = {
 			{
+				group = SECTION_PARAM,
+				key = SECTION_PARAM,
+				name = "Section",
+				values = {
+					"::/gui/main/icons/symbol_gear_28.tga",
+					"imsvale_road_priority_yield::/gui/tab-roundabout.tga",
+					"imsvale_road_priority_yield::/gui/tab-priority.tga",
+				},
+				tooltips = { "General", "Roundabouts", "Priority signs" },
+				defaultIndex = 1,
+				hideLabel = true,
+				resetOnCategoryChange = false,
+				uiType = api.type.enum.ScriptParamType.IconButton,
+				yearFrom = 0,
+				yearTo = 0,
+				location = api.type.enum.ScriptParamLocation.Default,
+				preserveValueInAllCategories = true,
+			},
+			{
 				group = SIGN_STYLE_PARAM,
 				key = SIGN_STYLE_PARAM,
 				name = "Sign style",
 				values = { "International", "Norwegian" },
 				defaultIndex = 1,
 				resetOnCategoryChange = false,
+				displayMode = api.type.enum.ScriptParamDisplayMode.Horizontal,
 				uiType = api.type.enum.ScriptParamType.ComboBox,
 				yearFrom = 0,
 				yearTo = 0,
 				location = api.type.enum.ScriptParamLocation.Default,
 				preserveValueInAllCategories = true,
+				checkEnabledFn = inSection("general"),
 			},
 			{
 				group = LANE_PARAM,
 				key = LANE_PARAM,
 				name = "Overwrite lanes",
-				values = { "Yes", "No" },
-				defaultIndex = 2,
+				values = { "Yes" },
+				defaultIndex = 1,
 				resetOnCategoryChange = false,
-				displayMode = api.type.enum.ScriptParamDisplayMode.Horizontal,
-				uiType = api.type.enum.ScriptParamType.Button,
+				uiType = api.type.enum.ScriptParamType.CheckBox,
 				yearFrom = 0,
 				yearTo = 0,
 				location = api.type.enum.ScriptParamLocation.Default,
 				preserveValueInAllCategories = true,
+				checkEnabledFn = inSection("general"),
 			},
 			{
 				group = DEDICATED_PARAM,
 				key = DEDICATED_PARAM,
 				name = "Dedicated turn lanes",
-				values = { "Yes", "No" },
-				defaultIndex = 2,
+				values = { "Yes" },
+				defaultIndex = 1,
+				resetOnCategoryChange = false,
+				uiType = api.type.enum.ScriptParamType.CheckBox,
+				yearFrom = 0,
+				yearTo = 0,
+				location = api.type.enum.ScriptParamLocation.Default,
+				preserveValueInAllCategories = true,
+				checkEnabledFn = inSection("general"),
+			},
+			{
+				group = FOLLOW_PARAM,
+				key = FOLLOW_PARAM,
+				name = "[Experimental] Follow lane edits",
+				tooltip = "Experimental",
+				tooltips = { "Experimental: Re-apply traffic light config on changes to lane config" },
+				values = { "Yes" },
+				defaultIndex = 1,
+				resetOnCategoryChange = false,
+				uiType = api.type.enum.ScriptParamType.CheckBox,
+				yearFrom = 0,
+				yearTo = 0,
+				location = api.type.enum.ScriptParamLocation.Default,
+				preserveValueInAllCategories = true,
+				checkEnabledFn = inSection("general"),
+			},
+			{
+				group = EXIT_PARAM,
+				key = EXIT_PARAM,
+				name = "Roundabout exit",
+				values = { "Style A", "Style B" },
+				tooltips = { "Exit from right lane only", "More exit lanes" },
+				defaultIndex = 1,
 				resetOnCategoryChange = false,
 				displayMode = api.type.enum.ScriptParamDisplayMode.Horizontal,
 				uiType = api.type.enum.ScriptParamType.Button,
@@ -1308,7 +1871,9 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				yearTo = 0,
 				location = api.type.enum.ScriptParamLocation.Default,
 				preserveValueInAllCategories = true,
+				checkEnabledFn = inSection("roundabout"),
 			},
+			(table.unpack or unpack)(diamondParams()),
 		},
 		builderAudioRes = {},
 		customAction = { recipe = PriorityRoadAction },

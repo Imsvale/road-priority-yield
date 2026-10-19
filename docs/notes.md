@@ -85,7 +85,7 @@ How the Priority Road tool places signs, what the user saw in game, and what is 
 5. **Left-hand traffic:** the sign side and the roundabout sign's arrows assume right-hand traffic.
 6. **Noise barriers and other things beside the road:** options the user named: a sign mounted on the barrier, hiding the barrier's last section, or a gantry.
 7. **Multi-lane approaches and one-way entries:** a second sign on the left (median) side may be expected; one-way roads would need one there.
-8. **Priority diamonds:** maybe at intervals along a priority road, never on roundabouts.
+8. **Priority diamonds:** done (priority road 25): at the start of a priority road and 60 m after junctions, skipped between close junctions (see CLAUDE.md). Later: the speed limit + diamond combination common in Norway.
 
 ## Ideas
 
@@ -140,4 +140,8 @@ Every lane still reaches every road it reached before, so routes stay valid. Lan
 - **Dedicated turn lanes:** cost no throughput in these tests. Their known risk is cars changing lanes into a queue that reaches the last upstream node: −32% at the lab's node 2010 (2026-10-15), though with protected-left phases there.
 - **Roundabouts have their own rule** (`roundaboutLanes`), not this one.
 - **Removing the yielding** leaves the rewritten lanes in place.
+
+## Follow lane edits (experimental, 2026-10-19)
+
+A player who edits a yielding junction's lanes by hand can leave connections without a green: new or recreated connections end up red in every phase (lab finding). With the tool's "Follow lane edits" on, the game script watches the junctions the tool set up and rebuilds their phases after a lane edit, keeping the player's lanes. See CLAUDE.md for how it works. Experimental until it proves stable and reliable (user).
 
