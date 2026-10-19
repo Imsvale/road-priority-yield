@@ -37,9 +37,22 @@
 -- and that entity's GAME_SCRIPT component, field `state` (script-doc engine/system.md, engine.md).
 --
 -- Subscribing: as the base game's own scripts do (e.g. game_mechanics/arrival_tracker), in
--- update whenever state:hasEventSubscriptions() is false. Subscriptions are the engine's
--- (GameScript.eventSubscriptions), not part of the saved state, so a "subscribed" flag in the
--- state could outlive them across a savegame load and never subscribe again.
+-- update whenever state:hasEventSubscriptions() is false. The subscriptions are saved with the game
+-- (GameScript.eventSubscriptions is part of the component, 2026-10-19), so later additions use a
+-- flag in the state, saved along with them (buildSubscribed).
+--
+-- Follow road edits (experimental, 2026-10-19; with "follow" on): a road type change replaces the
+-- segments and resets the node configs, our light included (lab findings, "Road upgrades").
+-- - Engine part, the game's build events ("apply_command"): before a build, the removed segments
+--   that end at a registered junction (priority or side road) are recorded with their nodes and
+--   their direction at each end (s.replaced); after it, priority segments are matched to their
+--   replacements (same two nodes, else the new segment at the junction pointing the same way: a
+--   split), and every junction touched is marked `repair`. Lane following skips junctions awaiting repair.
+-- - GUI part: the Priority Road tool's FollowRoadEdits (mounted all session through the game's
+--   ModEntryPointExtension) reads the marks from this state and applies the yielding again with the
+--   settings it was applied with (lights, lanes, signs), re-registering each junction, which clears
+--   the mark. Not this script's guiUpdate: game scripts run in their own environment and can't
+--   reach the tool's code (2026-10-20).
 --
 -- Sending commands from here: without a callback (callbacks are disallowed in the engine state).
 
@@ -55,6 +68,94 @@ local CT = api.type.ComponentType
 local function log(fmt, ...)
 	local args = { ... }
 	pcall(function() print("[yield] " .. string.format(fmt, (table.unpack or unpack)(args))) end)
+end
+
+-- A list from the engine: a Lua array, or a native vector (size() / at(i)).
+local function items(list)
+	local out = {}
+	if list == nil then return out end
+	local ok = pcall(function() for _, v in ipairs(list) do out[#out + 1] = v end end)
+	if not ok or #out == 0 then
+		pcall(function() for i = 1, list:size() do out[#out + 1] = list:at(i) end end)
+	end
+	return out
+end
+
+local function unit(x, y)
+	local l = math.sqrt(x * x + y * y)
+	if l < 1e-9 then return { x = 0, y = 0 } end
+	return { x = x / l, y = y / l }
+end
+
+-- Before a build: the removed segments that end at a registered junction (priority or side road),
+-- with their nodes and directions away from each end.
+local function beforeBuild(s, street)
+	local watched = {}
+	for key in pairs(s.junctions or {}) do
+		local node = tonumber(key)
+		if node then watched[node] = true end
+	end
+	for _, x in ipairs(items(street.removedSegments)) do
+		local seg, e = x.entity, x.comp
+		if seg and e and (watched[e.node0] or watched[e.node1]) then
+			s.replaced = s.replaced or {}
+			s.replaced[tostring(seg)] = {
+				node0 = e.node0, node1 = e.node1,
+				dir0 = unit(e.tangent0.x, e.tangent0.y), dir1 = unit(-e.tangent1.x, -e.tangent1.y),
+			}
+		end
+	end
+end
+
+-- After it: replacements for the recorded segments; their junctions marked for repair.
+local function afterBuild(s, street)
+	if not s.replaced or next(s.replaced) == nil then return end
+	local added = {}
+	for _, x in ipairs(items(street.addedSegments)) do
+		local e = x.comp
+		if x.entity and x.entity >= 0 and e then
+			added[#added + 1] = { seg = x.entity, node0 = e.node0, node1 = e.node1,
+				dir0 = unit(e.tangent0.x, e.tangent0.y), dir1 = unit(-e.tangent1.x, -e.tangent1.y) }
+		end
+	end
+	local function replacement(old, node)
+		local oldDir = old.node0 == node and old.dir0 or old.dir1
+		local far = old.node0 == node and old.node1 or old.node0
+		local best, bestDot = nil, -2
+		for _, n in ipairs(added) do
+			if (n.node0 == node and n.node1 == far) or (n.node1 == node and n.node0 == far) then return n.seg end
+			if n.node0 == node or n.node1 == node then
+				local d = n.node0 == node and n.dir0 or n.dir1
+				local dot = d.x * oldDir.x + d.y * oldDir.y
+				if dot > bestDot then best, bestDot = n.seg, dot end
+			end
+		end
+		return bestDot > 0.9 and best or nil
+	end
+	for key, j in pairs(s.junctions or {}) do
+		local node = tonumber(key)
+		local touched = false
+		for _, field in ipairs({ "a", "b" }) do
+			local old = j[field] and s.replaced[tostring(j[field])]
+			if old and node then
+				local new = replacement(old, node)
+				if new then
+					log("follow road edits: node %d segment %d replaced by %d", node, j[field], new)
+					j[field] = new
+				end
+				touched = true
+			end
+		end
+		-- A side road replaced: same priority segments, but the node config was reset.
+		for _, old in pairs(s.replaced) do
+			if old.node0 == node or old.node1 == node then touched = true end
+		end
+		if touched then
+			j.repair = true
+			j.pending = nil
+		end
+	end
+	s.replaced = nil
 end
 
 -- Why a registered junction can't be followed any more, or nil.
@@ -85,9 +186,12 @@ local function follow(s)
 		local node = tonumber(key)
 		local why = "bad entry"
 		if node then why = gone(node, j) end
+		if j.repair and why ~= "node gone" then why = false end -- awaiting repair: leave it alone
 		if why then
 			log("follow lane edits: node %s dropped (%s)", key, why)
 			s.junctions[key] = nil
+		elseif j.repair then
+			-- the tool's repair re-registers it
 		else
 			local fp = phases.fingerprint(api.engine.getComponent(node, CT.BASE_NODE_CONFIG))
 			if fp == j.fp then
@@ -112,8 +216,14 @@ local function update(_userParams, state, dt)
 	if not state:hasEventSubscriptions() then
 		state:subscribeToEvent(SIGNS_EVENT)
 	end
-	if dt <= 0 then return end
 	local s = state:get() or {}
+	if not s.buildSubscribed then
+		state:subscribeToEvent("onPreBuildProposal")
+		state:subscribeToEvent("onPostBuildProposal")
+		s.buildSubscribed = true
+		state:set(s)
+	end
+	if dt <= 0 then return end
 	if not s.follow then return end
 	if not phasesOk then
 		if s.lastError ~= "module" then log("follow lane edits: phases module failed to load: %s", tostring(phases)) end
@@ -134,6 +244,18 @@ local function update(_userParams, state, dt)
 end
 
 local function handleEvent(_userParams, state, _src, id, name, param)
+	if id == "apply_command" and (name == "onPreBuildProposal" or name == "onPostBuildProposal") then
+		local s = state:get() or {}
+		if not s.follow or not s.junctions then return end
+		local ok, err = pcall(function()
+			local street = param[1] and param[1].proposal
+			if not street then return end
+			if name == "onPreBuildProposal" then beforeBuild(s, street) else afterBuild(s, street) end
+		end)
+		if not ok then log("follow road edits: %s", tostring(err)) end
+		state:set(s)
+		return
+	end
 	if id ~= EVENT_ID or name ~= SIGNS_EVENT or type(param) ~= "table" then return end
 	local s = state:get() or {}
 	local kind = param.kind
@@ -156,7 +278,8 @@ local function handleEvent(_userParams, state, _src, id, name, param)
 		if param.remove then
 			s.junctions[key] = nil
 		else
-			s.junctions[key] = { a = param.a, b = param.b, round = param.round or false, typeId = param.typeId, fp = param.fp }
+			s.junctions[key] = { a = param.a, b = param.b, round = param.round or false, typeId = param.typeId, fp = param.fp,
+				settings = type(param.settings) == "table" and param.settings or nil }
 		end
 	elseif kind == "diamondSettings" and type(param.values) == "table" then
 		local v = {}

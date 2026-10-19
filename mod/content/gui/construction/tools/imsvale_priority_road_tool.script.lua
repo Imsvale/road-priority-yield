@@ -52,7 +52,7 @@ local color_util = ug_require "::/gui/main/color_util.tl"
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 39 (priority signs: one spacing rule)"
+local VERSION = "priority road 42 (follow road edits from a mod entry point)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -842,14 +842,16 @@ end
 -- from the version it was saved with, and the game script only subscribes when it has none, so
 -- an event added later would never arrive in older saves (the diamonds didn't, 2026-10-19).
 
-local function registerJunction(job)
+-- settings: what the junction was applied with ({ overwrite, dedicated, exitStyle, style, diamonds }),
+-- for repairs after road edits.
+local function registerJunction(job, settings)
 	local param
 	if job.remove then
 		param = { node = job.node, remove = true }
 	else
 		local cfg = api.engine.getComponent(job.node, CT.BASE_NODE_CONFIG)
 		param = { node = job.node, a = job.a, b = job.b, round = job.round, typeId = job.typeId,
-			fp = phases.fingerprint(cfg) }
+			fp = phases.fingerprint(cfg), settings = settings }
 	end
 	param.kind = "junction"
 	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, param))
@@ -1714,6 +1716,8 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				local lanes = laneSettings()
 				log("lanes: overwrite %s, dedicated %s, roundabout exit %s", tostring(lanes.overwrite),
 					tostring(lanes.dedicated), lanes.exitStyle)
+				local applied = { overwrite = lanes.overwrite, dedicated = lanes.dedicated, exitStyle = lanes.exitStyle,
+					style = (currentStyle()), diamonds = diamondSettings() }
 				apply(p, function(okCount, failCount)
 					configuredChanged()
 					local style, raw = currentStyle()
@@ -1727,7 +1731,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 					pending:set(false)
 					revision:set(revision:old() + 1)
 				end, lanes, function(job, success)
-					if success then registerJunction(job) end
+					if success then registerJunction(job, applied) end
 				end)
 				pcall(sendFollow, followSetting())
 				return true
@@ -1764,6 +1768,119 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 	params.setActionFn(actionFn, "imsvale_priority_road_" .. tostring(revision:old()))
 end)
+
+-- Repair after a road edit (experimental "Follow road edits", 2026-10-19). Called by FollowRoadEdits
+-- below, which watches the game script's state for junctions it marked for repair.
+-- todo: { { node, a, b, round, typeId, settings }, ... }, the junctions whose segments a build
+-- replaced (the game script has already moved a / b to the new segments). Each junction gets its
+-- yielding again with the settings it was applied with (light, phases, lanes, yield signs) and is
+-- re-registered; then the affected roads' priority signs are placed again. Priority signs stored
+-- under a segment that no longer exists are removed first: they stood beside the old road.
+local function repair(todo)
+	local typeId = invisibleType()
+	if not typeId then log("follow road edits: the Yield (invisible) light type wasn't found") return end
+	-- Leftover priority signs of replaced segments.
+	for key, ids in pairs(storedDiamonds()) do
+		local seg = tonumber(tostring(key):match(":(%d+)$") or "")
+		if seg and not isEdge(seg) and type(ids) == "table" then
+			removeSigns(ids)
+			storeDiamonds(key, {})
+		end
+	end
+	local roads = {}
+	for _, item in ipairs(todo) do
+		local node, settings = item.node, type(item.settings) == "table" and item.settings or {}
+		if node and api.engine.entityExists(node) and isEdge(item.a) and isEdge(item.b) then
+			local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
+			local states, why, sideSegs = junctionStates(node, item.a, item.b, cfg, item.round)
+			if states then
+				local j = { node = node, a = item.a, b = item.b, states = states, has = true,
+					new = { [item.a] = "priority", [item.b] = "priority" } }
+				for seg in pairs(sideSegs) do j.new[seg] = "yield" end
+				local plan = { junctions = { j }, round = item.round or false, typeId = typeId, remove = false }
+				local lanes = { overwrite = settings.overwrite == true, dedicated = settings.dedicated == true,
+					exitStyle = settings.exitStyle == "B" and "B" or "A" }
+				local style = settings.style or SIGN_STYLES[1]
+				apply(plan, function(okCount)
+					log("follow road edits: node %d %s", node, okCount > 0 and "repaired" or "repair refused")
+					local ok, err = pcall(updateSigns, plan, style)
+					if not ok then log("follow road edits: signs at node %d: %s", node, tostring(err)) end
+				end, lanes, function(job, success)
+					if success then registerJunction(job, settings) end
+				end)
+				if not item.round then roads[#roads + 1] = { seg = item.a, diamonds = settings.diamonds } end
+			else
+				log("follow road edits: node %d not repaired (%s)", node, tostring(why))
+			end
+		else
+			log("follow road edits: node %s not repaired (its node or segments are gone)", tostring(node))
+		end
+	end
+	-- Priority signs: each affected road once, with the settings it was applied with.
+	local done = {}
+	for _, r in ipairs(roads) do
+		if not done[r.seg] and isEdge(r.seg) then
+			local ok, plan = pcall(planFrom, r.seg)
+			if ok and plan and not plan.round then
+				for _, x in ipairs(plan.segs) do done[x] = true end
+				plan.remove = false
+				local saved = panelDiamonds
+				if type(r.diamonds) == "table" then panelDiamonds = r.diamonds end
+				local dOk, err = pcall(updateDiamonds, plan)
+				panelDiamonds = saved
+				if not dOk then log("follow road edits: priority signs: %s", tostring(err)) end
+			end
+		end
+	end
+end
+
+-- Mounted for the whole session through the game's ModEntryPointExtension (plugin resource
+-- gui/imsvale_follow_road_edits.res.lua), whether or not the tool is open. Every FOLLOW_EVERY steps
+-- it reads the yield game script's state and hands junctions marked `repair` to repair(), each
+-- once per session (repair re-registers them, which clears the mark). The game script's own
+-- guiUpdate couldn't do this: game scripts run in their own environment and don't see the tool's
+-- code (2026-10-20).
+local FOLLOW_EVERY = 30
+local follow = { steps = 0, handed = {} } -- GUI module state
+local function followRoadEdits()
+	local ok, s = pcall(function()
+		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(SIGN_GAME_SCRIPT)
+		local comp = entity and api.engine.getComponent(entity, CT.GAME_SCRIPT)
+		return comp and comp.state
+	end)
+	if not ok or type(s) ~= "table" or not s.follow or type(s.junctions) ~= "table" then return end
+	local todo = {}
+	for key, j in pairs(s.junctions) do
+		if type(j) == "table" and j.repair and not follow.handed[key] then
+			follow.handed[key] = true
+			todo[#todo + 1] = { node = tonumber(key), a = j.a, b = j.b, round = j.round, typeId = j.typeId, settings = j.settings }
+		end
+	end
+	for key in pairs(follow.handed) do
+		local j = s.junctions[key]
+		if not (type(j) == "table" and j.repair) then follow.handed[key] = nil end
+	end
+	if #todo > 0 then
+		local rOk, err = pcall(repair, todo)
+		if not rOk then log("follow road edits: repair failed: %s", tostring(err)) end
+	end
+end
+
+local entryOk, mod_entry_point = pcall(ug_require, "::/gui/main/mod_entry_point.tl")
+local FollowRoadEdits = nil
+if entryOk and mod_entry_point and mod_entry_point.ModEntryPointExtension then
+	FollowRoadEdits = react.RegisterPluginRecipe(mod_entry_point.ModEntryPointExtension, "ImsvaleFollowRoadEdits", function()
+		react.onStep(function()
+			follow.steps = follow.steps + 1
+			if follow.steps < FOLLOW_EVERY then return end
+			follow.steps = 0
+			followRoadEdits()
+		end)
+		return nil
+	end)
+else
+	log("follow road edits: no mod entry point (%s)", tostring(mod_entry_point))
+end
 
 log("loaded: %s", VERSION)
 
@@ -1842,9 +1959,9 @@ local function getDefinition(constructionDefinition, _repository, _params)
 			{
 				group = FOLLOW_PARAM,
 				key = FOLLOW_PARAM,
-				name = "[Experimental] Follow lane edits",
+				name = "[Experimental] Follow road edits",
 				tooltip = "Experimental",
-				tooltips = { "Experimental: Re-apply traffic light config on changes to lane config" },
+				tooltips = { "Experimental: re-apply the yielding after the road or its lanes are edited" },
 				values = { "Yes" },
 				defaultIndex = 1,
 				resetOnCategoryChange = false,
@@ -1886,5 +2003,6 @@ end
 function data()
 	return {
 		getDefinition = getDefinition,
+		FollowRoadEdits = FollowRoadEdits,
 	}
 end
