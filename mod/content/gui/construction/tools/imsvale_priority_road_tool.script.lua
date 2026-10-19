@@ -52,7 +52,7 @@ local color_util = ug_require "::/gui/main/color_util.tl"
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 38 (settings on hidden tabs read from their last seen values)"
+local VERSION = "priority road 39 (priority signs: one spacing rule)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1038,22 +1038,21 @@ end
 ---------------------------------------------------------------------------
 -- Diamonds (imsvale_priority_sign.con) on the right of each direction of travel, facing it, just
 -- past the curb as the yield signs. Distances along the road, across plain nodes:
--- Distances between junction edges (see diamondPlaces), not node centres.
--- - start: where the priority road begins (each end, for traffic driving onto it), DIAMOND_START
---   in; if the first junction comes sooner than DIAMOND_START_HALF, halfway to it;
--- - repeat: DIAMOND_REPEAT (+- DIAMOND_JITTER, fixed per junction from its id) after every
---   junction, unless the next junction ahead is closer than DIAMOND_MIN_GAP (the sign would stand
---   right before it): a run of close junctions gets one sign, after its last junction. A gap
---   shorter than twice DIAMOND_REPEAT gets its sign halfway, without jitter (user, 2026-10-19).
+-- Distances between junction edges (see diamondPlaces), not node centres. One rule for every sign
+-- (simplified by the user, 2026-10-19): min(spacing, gap / 2) from where the stretch begins (the
+-- previous junction's edge, or the road's start), gap = the stretch's visible length to the next
+-- junction's edge or the road's end; +- jitter, fixed per node from its id, kept inside the stretch.
+-- - start: where the priority road begins (each end, for traffic driving onto it), always;
+-- - repeat: after every junction, unless the stretch ahead is shorter than DIAMOND_MIN_GAP: a run
+--   of close junctions gets one sign, after its last junction.
 -- Not on roundabouts. No end-of-priority signs: the game has no right-hand rule to return to.
 -- Stored per node in the game script, apart from the yield signs (the style switch leaves them
 -- alone): repeats under their junction, start signs under the road's end node.
 local DIAMOND_FILE = "imsvale_priority_sign.con"
-local DIAMOND_START = 60.0       -- metres in from the start of the priority road
-local DIAMOND_START_HALF = 60.0  -- a first junction closer than this: the start sign goes halfway
-local DIAMOND_REPEAT = 60.0      -- metres after a junction
-local DIAMOND_JITTER = 2.0       -- +- metres, fixed per junction
-local DIAMOND_MIN_GAP = 60.0     -- metres to the next junction for a repeat to be placed
+local DIAMOND_SPACING = 60.0     -- metres from the start of the stretch (halfway on a stretch under twice this)
+local DIAMOND_JITTER = 2.0       -- +- metres, fixed per node
+local DIAMOND_MIN_GAP = 60.0     -- a stretch shorter than this gets no repeat sign (a 90 m block is
+                                 -- very roughly 60 m of road between junction edges, user)
 local DIAMOND_STEP = 2.0         -- metres between samples of the road's curve
 
 -- Priority sign settings: sliders under the tool's Priority signs tab (user, 2026-10-19; they were
@@ -1063,9 +1062,7 @@ local DIAMOND_STEP = 2.0         -- metres between samples of the road's curve
 -- every step into panelDiamonds; placement reads that. A change that has settled rebuilds every
 -- road's signs (DIAMOND_REBUILD_STEPS).
 local DIAMOND_SETTINGS = {
-	{ key = "start", name = "First sign", default = DIAMOND_START, min = 0, max = 200, step = 5 },
-	{ key = "startHalf", name = "Place at halfway point if segment is shorter than", default = DIAMOND_START_HALF, min = 0, max = 300, step = 5 },
-	{ key = "repeatAt", name = "Subsequent signs", default = DIAMOND_REPEAT, min = 10, max = 200, step = 5 },
+	{ key = "spacing", name = "Spacing", default = DIAMOND_SPACING, min = 10, max = 200, step = 5 },
 	{ key = "jitter", name = "Variation", default = DIAMOND_JITTER, min = 0, max = 20, step = 1 },
 	{ key = "minGap", name = "Minimum segment length", default = DIAMOND_MIN_GAP, min = 0, max = 300, step = 5 },
 }
@@ -1261,25 +1258,26 @@ local function diamondPlaces(plan)
 		keys[#keys + 1] = nodes[i] .. ":" .. seg
 		keys[#keys + 1] = nodes[i + 1] .. ":" .. seg
 	end
-	local function offset(node)
-		return cfg.repeatAt + (node % (2 * jitter + 1)) - jitter
+	-- Distance from the start of a stretch `gap` long: min(spacing, gap / 2), +- the node's jitter,
+	-- kept inside the stretch.
+	local function from(gap, node)
+		local d = math.min(cfg.spacing, gap / 2) + (node % (2 * jitter + 1)) - jitter
+		return math.max(1, math.min(gap - 1, d))
 	end
 	if not loop then
 		local first, lastJ = js[1], js[#js]
 		local toFirst = (first and first.sIn or endS) - startS
-		add(1, startS + ((first and toFirst < cfg.startHalf) and toFirst / 2 or cfg.start), 1)
+		add(1, startS + from(toFirst, nodes[1]), 1)
 		local fromLast = endS - (lastJ and lastJ.sOut or startS)
-		add(#nodes, endS - ((lastJ and fromLast < cfg.startHalf) and fromLast / 2 or cfg.start), -1)
+		add(#nodes, endS - from(fromLast, nodes[#nodes]), -1)
 	end
 	for k, j in ipairs(js) do
-		-- Distance from the junction's edge: DIAMOND_REPEAT (+- jitter), or halfway on a short gap.
-		local function from(gap) return gap < 2 * cfg.repeatAt and gap / 2 or offset(j.node) end
 		local nextIn = js[k + 1] and js[k + 1].sIn or (loop and js[1].sIn + L) or endS
 		local ahead = nextIn - j.sOut
-		if ahead >= cfg.minGap then add(j.i, j.sOut + from(ahead), 1) end
+		if ahead >= cfg.minGap then add(j.i, j.sOut + from(ahead, j.node), 1) end
 		local prevOut = js[k - 1] and js[k - 1].sOut or (loop and js[#js].sOut - L) or startS
 		local behind = j.sIn - prevOut
-		if behind >= cfg.minGap then add(j.i, j.sIn - from(behind), -1) end
+		if behind >= cfg.minGap then add(j.i, j.sIn - from(behind, j.node), -1) end
 	end
 	return places, pts, nodes, keys
 end
