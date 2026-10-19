@@ -90,7 +90,7 @@ How the Priority Road tool places signs, what the user saw in game, and what is 
 ## Ideas
 
 - **Lane configuration as part of the setup** (user 2026-10-17):
-  - Done for ordinary junctions (2026-10-19, see "Lanes at ordinary junctions" below). Roundabouts still to do.
+  - Done (2026-10-19): ordinary junctions (see "Lanes at ordinary junctions" below) and roundabouts (`roundaboutLanes`, the user's rules: the ring steps one lane toward the exits at each junction; see CLAUDE.md). The roundabout rule isn't measured yet.
   - The phases must match: every lane connection green in some phase. Otherwise cars choose a lane for a turn its connections allow, never get a green, and are stranded.
   - Lanes and phases go in one proposal.
 
@@ -138,6 +138,6 @@ Every lane still reaches every road it reached before, so routes stay valid. Lan
 - **What the lanes fix:** turns that merged into the same lane. The priority road's left turns gain most, about a third fewer forced on wide roads.
 - **What they can't fix:** the side roads' left turns cross the opposite straight-on traffic, so they stay forced nearly every time. That's where a player upgrades to a signalled junction (user).
 - **Dedicated turn lanes:** cost no throughput in these tests. Their known risk is cars changing lanes into a queue that reaches the last upstream node: −32% at the lab's node 2010 (2026-10-15), though with protected-left phases there.
-- **Roundabouts keep their lanes for now** (`PLANS.roundabout.lanes = false`).
+- **Roundabouts have their own rule** (`roundaboutLanes`), not this one.
 - **Removing the yielding** leaves the rewritten lanes in place.
 

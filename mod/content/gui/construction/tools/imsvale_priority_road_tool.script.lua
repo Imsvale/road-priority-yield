@@ -34,12 +34,12 @@
 --   allowed).
 -- Junctions where no side road leads in (exits only) get no light.
 --
--- Lanes (opt-in, ordinary junctions only; see LANE_PARAM): "Overwrite lanes" makes each turn land
--- in its own lane instead of fanning out into every lane of the road it turns into; "Dedicated turn
--- lanes" on top of it makes turning lanes turn-only where another lane still goes straight on.
--- Lanes and phases are then set together in one node config proposal, so every connection has a
--- green. Roundabouts keep their lanes (their rules are still to be worked out). Removing the
--- yielding leaves the lanes as they are. Measured in the lab (../Smart traffic lights,
+-- Lanes (opt-in; see LANE_PARAM): "Overwrite lanes" sets each junction's lanes by its plan's
+-- rule. Ordinary junctions: each turn lands in its own lane instead of fanning out into every lane
+-- of the road it turns into; "Dedicated turn lanes" on top of it makes turning lanes turn-only
+-- where another lane still goes straight on. Roundabouts: their own rule (roundaboutLanes: the
+-- ring steps toward the exits). Lanes and phases are then set together in one node config
+-- proposal, so every connection has a green. Removing the yielding leaves the lanes as they are. Measured in the lab (../Smart traffic lights,
 -- docs/studies/2026-10-18_give-way-junctions.md, runs 15-25): never worse than the game's lanes,
 -- up to 19% fewer forced entries on wide roads.
 --
@@ -52,7 +52,7 @@ local color_util = ug_require "::/gui/main/color_util.tl"
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 20 (lane settings: overwrite lanes, dedicated turn lanes)"
+local VERSION = "priority road 22 (roundabout lane rules)"
 local CT = api.type.ComponentType
 
 -- Phase plans: one for roundabouts, one for everything else (user, 2026-10-19). Maxima in
@@ -61,10 +61,11 @@ local CT = api.type.ComponentType
 -- - yield: phase #2; short, or a long side queue would hold the priority road (1 s: user, 2026-10-17);
 -- - pedestrian: phase #3, only where there are crosswalks;
 -- - exitsInYield: exits (priority road onto a side road) also green in phase #2;
--- - lanes: the lane settings apply (roundabout lane rules are still to be worked out).
+-- - lanes: the lane rule "Overwrite lanes" applies ("roundabout": roundaboutLanes; "junction":
+--   rewriteLanes, with "Dedicated turn lanes").
 local PLANS = {
-	roundabout = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = true, lanes = false },
-	junction = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = false, lanes = true },
+	roundabout = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = true, lanes = "roundabout" },
+	junction = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = false, lanes = "junction" },
 }
 local MAX_TURN = 45            -- degrees: how far the priority road may bend at a junction
 local ROUND_TOLERANCE = 0.12   -- a loop is a roundabout if every sample is within 12 % of the mean radius
@@ -494,6 +495,97 @@ local function rewriteLanes(node, cfg, dedicated)
 	return new
 end
 
+-- Roundabout lanes (user's rules, 2026-10-19), at a ring junction with one side road. Ring lanes
+-- counted from the curb (the outside of the ring), right-hand traffic:
+-- - The side road's outbound lanes take as many ring lanes, curb first, one to one: those exit.
+-- - Exiting lanes don't go on along the ring, except the leftmost exiting lane: no lane goes on
+--   to the right of an exiting lane.
+-- - Going on, a lane steps one lane to the right (towards the exits); the median lane also keeps
+--   its own lane. So every lane gets one lane closer to the exit at each junction.
+-- - Entries: each entry lane takes a block of ring lanes, curb first; when there are fewer entry
+--   lanes than ring lanes, the extra ring lanes go to the leftmost entry lanes (the game gives
+--   them to the right one; the left gives a better balance between the lanes, user). More entry
+--   lanes than ring lanes: the curb-side ones share the curb lane.
+-- - A one-lane ring: its lane exits and goes on. No exit at this junction: lane to lane.
+-- Returns the new connections, or nil when the junction isn't one ring in, one ring out, one side
+-- road.
+local function roundaboutLanes(node, cfg, a, b)
+	local old = cfg.laneConnections -- copies
+	local ringIn, ringOut
+	for _, c in ipairs(old) do
+		if c.segment0 == a and c.segment1 == b then ringIn, ringOut = a, b end
+		if c.segment0 == b and c.segment1 == a then ringIn, ringOut = b, a end
+	end
+	if not ringIn then return nil end
+	local spoke = nil
+	for _, seg in ipairs(api.engine.system.streetSystem.getNodeStreetSegments(node)) do
+		if seg ~= a and seg ~= b then
+			if spoke then return nil end -- two side roads at one node: left alone
+			spoke = seg
+		end
+	end
+	if not spoke then return nil end
+	-- Lanes as the connections use them; inbound curb first (1 = curb), outbound curb first
+	-- (the highest number = curb).
+	local sets = { ringIn = {}, ringOut = {}, spokeOut = {}, entry = {} }
+	local template = old[1]
+	for _, c in ipairs(old) do
+		if c.segment0 == ringIn then sets.ringIn[c.lane0] = true end
+		if c.segment1 == ringOut then sets.ringOut[c.lane1] = true end
+		if c.segment1 == spoke then sets.spokeOut[c.lane1] = true end
+		if c.segment0 == spoke and c.segment1 == ringOut then sets.entry[c.lane0] = true end
+	end
+	local function sorted(set, inbound)
+		local l = {}
+		for lane in pairs(set) do l[#l + 1] = lane end
+		table.sort(l, inbound and function(x, y) return x < y end or function(x, y) return x > y end)
+		return l
+	end
+	local ringInL, ringOutL = sorted(sets.ringIn, true), sorted(sets.ringOut, false)
+	local spokeOutL, entryL = sorted(sets.spokeOut, false), sorted(sets.entry, true)
+	if #ringInL == 0 or #ringOutL == 0 then return nil end
+	local new = {}
+	local function add(s0, l0, s1, l1)
+		local c = nil
+		pcall(function() c = api.type.LaneConnection.new() end)
+		if c == nil then c = api.engine.getComponent(node, CT.BASE_NODE_CONFIG).laneConnections[1] end
+		c.segment0, c.lane0, c.segment1, c.lane1 = s0, l0, s1, l1
+		pcall(function() c.withRoad, c.withTram = template.withRoad, template.withTram end)
+		new[#new + 1] = c
+	end
+	local n, nOut = #ringInL, #ringOutL
+	local function ringLane(i) return ringOutL[math.max(1, math.min(i, nOut))] end
+	local m = math.min(#spokeOutL, n) -- ring lanes that exit
+	for i = 1, m do add(ringIn, ringInL[i], spoke, spokeOutL[i]) end
+	if n == 1 then
+		add(ringIn, ringInL[1], ringOut, ringLane(1))
+	elseif m == 0 then
+		for i = 1, n do add(ringIn, ringInL[i], ringOut, ringLane(i)) end -- no exit here: lane to lane
+	else
+		for i = 2, n do
+			if i >= m then add(ringIn, ringInL[i], ringOut, ringLane(i - 1)) end
+		end
+		add(ringIn, ringInL[n], ringOut, ringLane(n))
+	end
+	local k = #entryL
+	if k > 0 then
+		if k >= nOut then
+			for j = 1, k do add(spoke, entryL[j], ringOut, ringOutL[math.max(1, j - (k - nOut))]) end
+		else
+			local base, extra = math.floor(nOut / k), nOut % k
+			local next = 1
+			for j = 1, k do
+				local count = base + ((j > k - extra) and 1 or 0)
+				for _ = 1, count do
+					add(spoke, entryL[j], ringOut, ringOutL[next])
+					next = next + 1
+				end
+			end
+		end
+	end
+	return new
+end
+
 -- Lanes and phases in one street proposal (the node config replaced), so no connection is left
 -- without a green.
 local function sendNodeConfig(node, cfg, conns, tl, done)
@@ -547,8 +639,16 @@ local function apply(plan, done, lanes)
 			tl.trafficLightType = plan.typeId
 			local job = { node = j.node, tl = tl, pref = api.type.enum.TrafficLightPreference.YES }
 			local planHere = plan.round and PLANS.roundabout or PLANS.junction
-			if lanes and lanes.overwrite and planHere.lanes then
-				local conns = rewriteLanes(j.node, cfg, lanes.dedicated)
+			local conns = nil
+			if lanes and lanes.overwrite then
+				if planHere.lanes == "junction" then
+					conns = rewriteLanes(j.node, cfg, lanes.dedicated)
+				elseif planHere.lanes == "roundabout" then
+					conns = roundaboutLanes(j.node, cfg, j.a, j.b)
+					if not conns then log("node %d: roundabout lanes left as they are", j.node) end
+				end
+			end
+			if conns then
 				local states = junctionStates(j.node, j.a, j.b, cfg, plan.round, conns)
 				if states then
 					tl.states = states
@@ -589,8 +689,10 @@ end
 -- index of the chosen entry (the game's getParamDefaultValue returns defaultIndex as is). Changing
 -- it while the tool is open restyles every junction's signs (restyleAll).
 local SIGN_STYLE_PARAM = "imsvaleSignStyle"
--- Lane settings (see the header): No / Yes, 1-based like the sign style. Opt-in (user,
--- 2026-10-19): a player who doesn't look at the settings never loses their own lane work.
+-- Lane settings (see the header): Yes / No buttons (Button, Horizontal: the game's segmented
+-- buttons, as the lane tool's "Symmetry"; a drop-down is for long or many values, like the sign
+-- style), default No, read 1-based: 1 = Yes. Opt-in (user, 2026-10-19): a player who doesn't look
+-- at the settings never loses their own lane work.
 local LANE_PARAM = "imsvaleOverwriteLanes"
 local DEDICATED_PARAM = "imsvaleDedicatedTurnLanes"
 local SIGN_STYLES = { "intl", "no" }          -- by parameter index; "no": Norwegian, tighter corners
@@ -1006,7 +1108,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	local function laneSettings()
 		local cur = {}
 		pcall(function() cur = params.getCurrentParams() end)
-		return { overwrite = cur[LANE_PARAM] == 2, dedicated = cur[DEDICATED_PARAM] == 2 }
+		return { overwrite = cur[LANE_PARAM] == 1, dedicated = cur[DEDICATED_PARAM] == 1 }
 	end
 
 	-- The game opens the tool's info callout whenever a parameter in the menu's list changes
@@ -1183,10 +1285,11 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				group = LANE_PARAM,
 				key = LANE_PARAM,
 				name = "Overwrite lanes",
-				values = { "No", "Yes" },
-				defaultIndex = 1,
+				values = { "Yes", "No" },
+				defaultIndex = 2,
 				resetOnCategoryChange = false,
-				uiType = api.type.enum.ScriptParamType.ComboBox,
+				displayMode = api.type.enum.ScriptParamDisplayMode.Horizontal,
+				uiType = api.type.enum.ScriptParamType.Button,
 				yearFrom = 0,
 				yearTo = 0,
 				location = api.type.enum.ScriptParamLocation.Default,
@@ -1196,10 +1299,11 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				group = DEDICATED_PARAM,
 				key = DEDICATED_PARAM,
 				name = "Dedicated turn lanes",
-				values = { "No", "Yes" },
-				defaultIndex = 1,
+				values = { "Yes", "No" },
+				defaultIndex = 2,
 				resetOnCategoryChange = false,
-				uiType = api.type.enum.ScriptParamType.ComboBox,
+				displayMode = api.type.enum.ScriptParamDisplayMode.Horizontal,
+				uiType = api.type.enum.ScriptParamType.Button,
 				yearFrom = 0,
 				yearTo = 0,
 				location = api.type.enum.ScriptParamLocation.Default,
