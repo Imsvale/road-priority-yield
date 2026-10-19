@@ -6,8 +6,9 @@ Makes side traffic yield at junctions and roundabouts. TF3 cars never give way; 
 
 At each junction on a priority road:
 - **Phase #1:** connections coming from the priority road green. 60 s maximum, 0 s minimum, skipping allowed: it ends as soon as the priority road is empty and someone waits.
-- **Phase #2:** side roads green, and the exits (priority road onto a side road: no conflict with entering traffic). 1 s maximum (user's choice, 2026-10-17), same otherwise. Keep this cap short: skipping only ends a phase early when its own lanes empty, so a long side queue would otherwise hold the priority road for the full duration.
+- **Phase #2:** side roads green. On roundabouts also the exits (ring onto a side road: no conflict with entering traffic); at ordinary junctions not, since at a 4-way the priority road's turns cross the side roads (lab, 2026-10-19). Roundabouts and junctions have separate plans (`PLANS` in the tool), so a change for one can't break the other (user). 1 s maximum (user's choice, 2026-10-17), same otherwise. Keep this cap short: skipping only ends a phase early when its own lanes empty, so a long side queue would otherwise hold the priority road for the full duration.
 - **Pedestrian phase** only where there are crosswalks. No all-red phases.
+- **Lanes (opt-in, ordinary junctions only):** with the tool setting "Overwrite lanes" on, each turn lands in its own lane instead of fanning out into every lane of the road it turns into. With "Dedicated turn lanes" also on, turning lanes become turn-only where another lane still goes straight on. Lanes and phases are set in one node config proposal. Roundabouts keep their lanes (`PLANS.roundabout.lanes = false`) until their rules are worked out. Removing the yielding leaves the lanes.
 
 Measured in the lab (paired runs on a roundabout): stopping on the ring −96%, all stopping −33%, throughput +2%, and the ring never broke down.
 
@@ -86,6 +87,8 @@ Measured in the lab (paired runs on a roundabout): stopping on the ring −96%, 
    - **The goal:** applying priority / yield also sets the junctions' lane connections, starting with roundabouts.
    - **The rules:** either general ones that work for any combination of ring and approach lanes, or one hard-coded layout per combination.
    - **Phases must match the lanes:** every lane connection must be green in some phase. Otherwise cars use a lane because its connections allow a turn, find no green for it, and are stranded; that lane connection is effectively orphaned.
+   - **Done for ordinary junctions (priority road 20, 2026-10-19):** the settings "Overwrite lanes" (No / Yes, default No: a player never loses their own lane work by not looking at the settings) and "Dedicated turn lanes" (only with the first on). `rewriteLanes` and `sendNodeConfig` in the tool, ported from the lab's `tools/set_lanes.lua` (rules "nofan" and "dedicated"; `../Smart traffic lights/docs/design/2026-10-19_lane-rules.md`). Measured on T and 4-way junctions up to all 6-lane roads: never worse than the game's lanes, up to 19% fewer forced entries. Still to do: roundabouts (curb lane must exit, median lane stays on the ring), left-hand traffic.
+   - **Hand edits after applying:** connections that survive keep their phases, new or recreated ones are red in every phase (lab, 2026-10-19). The player's business: no warnings (user).
    - **So:** set lanes and phases together, in one proposal (`nodeConfigsToAdd` with both, as the lab's `tools/set_layout.lua` does), and check that every connection is unlocked in at least one phase.
 
 ## Roadcraft: compare, never copy

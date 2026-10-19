@@ -4,7 +4,7 @@
 -- markings, 2026-10-16). A two-phase light without all-red phases makes a good proxy: the
 -- priority road is green as long as it has traffic (phase #1: 60 s, 0 s minimum, skipping
 -- allowed, so it ends as soon as the priority road is empty and someone waits), then the side
--- roads get a short turn (phase #2: 5 s, same) and the priority road is back. With the
+-- roads get a short turn (phase #2: see PLANS, same) and the priority road is back. With the
 -- invisible light type nobody sees the lights. Paired test on a roundabout: stopping on the ring
 -- −96%, and the ring never broke down (docs/notes.md).
 --
@@ -22,12 +22,26 @@
 -- changes, the old icon crossed out beside the new one.
 --
 -- Per junction (3+ roads) on the priority road, numbering lockedLanes as the game does
--- (lane connections, then crosswalks):
+-- (lane connections, then crosswalks), with the plan for its kind (PLANS: roundabouts and
+-- ordinary junctions are configured apart, so a change for one can't reach the other):
 -- - phase #1: connections coming from the priority road's two segments green;
--- - phase #2: connections coming from the side roads green, and those leaving the priority
---   road onto a side road (exits): they don't cross the entering traffic, so they stay green;
--- - phase #3, only with crosswalks: crosswalks green (PEDESTRIAN_SECONDS, skipping allowed).
+-- - phase #2: connections coming from the side roads green; on a roundabout also those leaving
+--   the ring onto a side road (exits): they don't cross the entering traffic. At ordinary
+--   junctions the exits stay red in #2: at a 4-way the priority road's turns cross or merge
+--   with the side roads' traffic (lab study, paired runs 2026-10-19: forced side road entries
+--   33 -> 25, priority road unaffected; at a T no difference);
+-- - phase #3, only with crosswalks: crosswalks green (the plan's pedestrian maximum, skipping
+--   allowed).
 -- Junctions where no side road leads in (exits only) get no light.
+--
+-- Lanes (opt-in, ordinary junctions only; see LANE_PARAM): "Overwrite lanes" makes each turn land
+-- in its own lane instead of fanning out into every lane of the road it turns into; "Dedicated turn
+-- lanes" on top of it makes turning lanes turn-only where another lane still goes straight on.
+-- Lanes and phases are then set together in one node config proposal, so every connection has a
+-- green. Roundabouts keep their lanes (their rules are still to be worked out). Removing the
+-- yielding leaves the lanes as they are. Measured in the lab (../Smart traffic lights,
+-- docs/studies/2026-10-18_give-way-junctions.md, runs 15-25): never worse than the game's lanes,
+-- up to 19% fewer forced entries on wide roads.
 --
 -- Road direction comes from the junction's lane connections (which segment leads to which),
 -- not from the lanes' transport mode flags.
@@ -38,12 +52,20 @@ local color_util = ug_require "::/gui/main/color_util.tl"
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 18 (no info callout when switching the sign style)"
+local VERSION = "priority road 20 (lane settings: overwrite lanes, dedicated turn lanes)"
 local CT = api.type.ComponentType
 
-local PRIORITY_SECONDS = 60.0  -- phase #1 maximum; it ends early when the priority road is empty
-local YIELD_SECONDS = 1.0      -- phase #2 maximum; short, or a long side queue would hold the priority road
-local PEDESTRIAN_SECONDS = 6.0 -- phase #3, only where there are crosswalks
+-- Phase plans: one for roundabouts, one for everything else (user, 2026-10-19). Maxima in
+-- seconds; every phase has a 0 s minimum and may be skipped.
+-- - priority: phase #1; it ends early when the priority road is empty;
+-- - yield: phase #2; short, or a long side queue would hold the priority road (1 s: user, 2026-10-17);
+-- - pedestrian: phase #3, only where there are crosswalks;
+-- - exitsInYield: exits (priority road onto a side road) also green in phase #2;
+-- - lanes: the lane settings apply (roundabout lane rules are still to be worked out).
+local PLANS = {
+	roundabout = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = true, lanes = false },
+	junction = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = false, lanes = true },
+}
 local MAX_TURN = 45            -- degrees: how far the priority road may bend at a junction
 local ROUND_TOLERANCE = 0.12   -- a loop is a roundabout if every sample is within 12 % of the mean radius
 local MAX_SEGMENTS = 400       -- stop following a road after this many segments
@@ -249,9 +271,12 @@ local function invisibleType()
 end
 
 -- Phases for one junction, or nil and why not.
-local function junctionStates(node, a, b, cfg)
+-- `conns`: the lane connections the phases are for (default: the junction's own).
+local function junctionStates(node, a, b, cfg, round, conns)
+	local p = round and PLANS.roundabout or PLANS.junction
 	local priority = { [a] = true, [b] = true }
-	local conns, nConn = cfg.laneConnections, #cfg.laneConnections
+	conns = conns or cfg.laneConnections
+	local nConn = #conns
 	local nCross = #cfg.crosswalks
 	local sideIn, sideSegs = 0, {}
 	for _, c in ipairs(conns) do
@@ -274,11 +299,13 @@ local function junctionStates(node, a, b, cfg)
 		return st
 	end
 	local states = {
-		phase(PRIORITY_SECONDS, function(c) return c and priority[c.segment0] end),
-		phase(YIELD_SECONDS, function(c) return c and (not priority[c.segment0] or not priority[c.segment1]) end),
+		phase(p.priority, function(c) return c and priority[c.segment0] end),
+		phase(p.yield, function(c)
+			return c and (not priority[c.segment0] or (p.exitsInYield and not priority[c.segment1]))
+		end),
 	}
 	if nCross > 0 then
-		states[#states + 1] = phase(PEDESTRIAN_SECONDS, function(c, cross) return cross ~= nil end)
+		states[#states + 1] = phase(p.pedestrian, function(c, cross) return cross ~= nil end)
 	end
 	return states, nil, sideSegs
 end
@@ -309,7 +336,7 @@ local function planFrom(seg)
 		if #api.engine.system.streetSystem.getNodeStreetSegments(n.node) >= 3 then
 			local cfg = api.engine.getComponent(n.node, CT.BASE_NODE_CONFIG)
 			if cfg then
-				local states, why, sideSegs = junctionStates(n.node, n.a, n.b, cfg)
+				local states, why, sideSegs = junctionStates(n.node, n.a, n.b, cfg, plan.round)
 				local has = api.engine.getComponent(n.node, CT.BASE_NODE_TRAFFIC_LIGHT) ~= nil
 					and typeId ~= nil and cfg.trafficLightConfig.trafficLightType == typeId
 				local j = { node = n.node, a = n.a, b = n.b, states = states, why = why, has = has }
@@ -376,6 +403,119 @@ end
 -- Applying
 ---------------------------------------------------------------------------
 
+-- Lane rules, ported from the lab's tools/set_lanes.lua. Right-hand traffic; lane numbers as
+-- seen from the node: inbound 1 = curb, outbound the highest number = curb.
+-- - Which inbound lanes make which turn stays as it is (the game's or the player's choice).
+-- - Per approach and road turned into: a right turn maps its inbound lanes, curb first, onto the
+--   road's outbound lanes, curb first, one to one; a left turn the same from the median side.
+--   More inbound lanes than outbound ones: the extra ones share the last outbound lane.
+-- - Straight on and U-turns stay as they are.
+-- - dedicated: then straight on is dropped from the lanes that turn, as long as another lane of
+--   the approach still goes straight on without turning.
+-- Every inbound lane still reaches every road it reached before, so routes stay valid.
+local function turnKind(node, a, b)
+	local da, db = leaving(a, node), leaving(b, node)
+	local hx, hy = -da.x, -da.y
+	local angle = math.deg((math.atan2 or math.atan)(hx * db.y - hy * db.x, hx * db.x + hy * db.y))
+	if math.abs(angle) < 30 then return "straight" end
+	if math.abs(angle) > 150 then return "U-turn" end
+	return angle > 0 and "left" or "right"
+end
+
+local function rewriteLanes(node, cfg, dedicated)
+	local old = cfg.laneConnections -- copies
+	local kinds = {}
+	for i, c in ipairs(old) do kinds[i] = turnKind(node, c.segment0, c.segment1) end
+	local outLanes = {}
+	for _, c in ipairs(old) do
+		outLanes[c.segment1] = outLanes[c.segment1] or {}
+		outLanes[c.segment1][c.lane1] = true
+	end
+	local groups, order = {}, {}
+	for i, c in ipairs(old) do
+		if kinds[i] == "left" or kinds[i] == "right" then
+			local key = c.segment0 .. ">" .. c.segment1
+			local g = groups[key]
+			if not g then
+				g = { kind = kinds[i], lanes = {}, byLane = {} }
+				groups[key], order[#order + 1] = g, key
+			end
+			if not g.byLane[c.lane0] then
+				g.byLane[c.lane0] = c
+				g.lanes[#g.lanes + 1] = c.lane0
+			end
+		end
+	end
+	local new = {}
+	for i, c in ipairs(old) do
+		if kinds[i] ~= "left" and kinds[i] ~= "right" then new[#new + 1] = c end
+	end
+	for _, key in ipairs(order) do
+		local g = groups[key]
+		local outs = {}
+		for lane in pairs(outLanes[g.byLane[g.lanes[1]].segment1]) do outs[#outs + 1] = lane end
+		if g.kind == "right" then
+			table.sort(g.lanes)                                    -- curb first
+			table.sort(outs, function(x, y) return x > y end)     -- curb first
+		else
+			table.sort(g.lanes, function(x, y) return x > y end)  -- median first
+			table.sort(outs)                                       -- median first
+		end
+		for i, lane0 in ipairs(g.lanes) do
+			local c = g.byLane[lane0]
+			c.lane1 = outs[math.min(i, #outs)]
+			new[#new + 1] = c
+		end
+	end
+	if dedicated then
+		local turns, straightLanes = {}, {}
+		for _, c in ipairs(new) do
+			local kind = turnKind(node, c.segment0, c.segment1)
+			if kind == "left" or kind == "right" then turns[c.segment0 .. ":" .. c.lane0] = true end
+			if kind == "straight" then
+				straightLanes[c.segment0] = straightLanes[c.segment0] or {}
+				straightLanes[c.segment0][c.lane0] = true
+			end
+		end
+		local keepOne = {}
+		for seg, lanes in pairs(straightLanes) do
+			for lane in pairs(lanes) do
+				if not turns[seg .. ":" .. lane] then keepOne[seg] = true end
+			end
+		end
+		local kept = {}
+		for _, c in ipairs(new) do
+			local drop = keepOne[c.segment0] and turns[c.segment0 .. ":" .. c.lane0]
+				and turnKind(node, c.segment0, c.segment1) == "straight"
+			if not drop then kept[#kept + 1] = c end
+		end
+		new = kept
+	end
+	return new
+end
+
+-- Lanes and phases in one street proposal (the node config replaced), so no connection is left
+-- without a green.
+local function sendNodeConfig(node, cfg, conns, tl, done)
+	local nc = api.type.BaseNodeLaneConnectionAndEntity.new()
+	nc.entity = node
+	local comp = nc.comp
+	comp.laneConnections = conns
+	comp.crosswalks = cfg.crosswalks
+	comp.trafficLightPreference = api.type.enum.TrafficLightPreference.YES
+	comp.doubleSlipSwitch = false
+	comp.trafficLightConfig = tl
+	pcall(function() comp.userModifiedLaneConnections = true end)
+	pcall(function() comp.userModifiedTrafficLightStates = true end)
+	nc.comp = comp
+	local proposal = api.type.SimpleProposal.new()
+	proposal.streetProposal.nodeConfigsToAdd = { nc }
+	proposal.streetProposal.nodeConfigsToRemove = { node }
+	api.cmd.sendCommand(api.cmd.makeWorldBuildProposalCmd(proposal, nil, false, true), function(_, success)
+		done(success)
+	end)
+end
+
 local function send(node, tl, preference, done)
 	local proposal = api.engine.util.proposal.createTrafficLightProposal(node, tl, preference)
 	api.cmd.sendCommand(api.cmd.makeWorldBuildProposalCmd(proposal, nil, false, true), function(_, success)
@@ -384,7 +524,8 @@ local function send(node, tl, preference, done)
 end
 
 -- Apply (or remove) at every junction; `done(okCount, failCount)` once all have answered.
-local function apply(plan, done)
+-- `lanes`: { overwrite = bool, dedicated = bool } from the tool's settings.
+local function apply(plan, done, lanes)
 	local pending, ok, failed = 0, 0, 0
 	local function answered(success)
 		if success then ok = ok + 1 else failed = failed + 1 end
@@ -404,13 +545,28 @@ local function apply(plan, done)
 			local tl = cfg.trafficLightConfig:clone()
 			tl.states = j.states
 			tl.trafficLightType = plan.typeId
-			jobs[#jobs + 1] = { node = j.node, tl = tl, pref = api.type.enum.TrafficLightPreference.YES }
+			local job = { node = j.node, tl = tl, pref = api.type.enum.TrafficLightPreference.YES }
+			local planHere = plan.round and PLANS.roundabout or PLANS.junction
+			if lanes and lanes.overwrite and planHere.lanes then
+				local conns = rewriteLanes(j.node, cfg, lanes.dedicated)
+				local states = junctionStates(j.node, j.a, j.b, cfg, plan.round, conns)
+				if states then
+					tl.states = states
+					job.conns, job.cfg = conns, cfg
+				end
+			end
+			jobs[#jobs + 1] = job
 		end
 	end
 	if #jobs == 0 then return done(0, 0) end
 	pending = #jobs
 	for _, job in ipairs(jobs) do
-		local sent, err = pcall(send, job.node, job.tl, job.pref, answered)
+		local sent, err
+		if job.conns then
+			sent, err = pcall(sendNodeConfig, job.node, job.cfg, job.conns, job.tl, answered)
+		else
+			sent, err = pcall(send, job.node, job.tl, job.pref, answered)
+		end
 		if not sent then
 			log("node %d: %s", job.node, tostring(err))
 			answered(false)
@@ -433,6 +589,10 @@ end
 -- index of the chosen entry (the game's getParamDefaultValue returns defaultIndex as is). Changing
 -- it while the tool is open restyles every junction's signs (restyleAll).
 local SIGN_STYLE_PARAM = "imsvaleSignStyle"
+-- Lane settings (see the header): No / Yes, 1-based like the sign style. Opt-in (user,
+-- 2026-10-19): a player who doesn't look at the settings never loses their own lane work.
+local LANE_PARAM = "imsvaleOverwriteLanes"
+local DEDICATED_PARAM = "imsvaleDedicatedTurnLanes"
 local SIGN_STYLES = { "intl", "no" }          -- by parameter index; "no": Norwegian, tighter corners
 local SIGN_BACK = 0.5          -- metres back from the junction edge along the approach (3 m stood
                                -- 2-3 m too far back on a 16 m town road, 2026-10-18)
@@ -843,6 +1003,12 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		return SIGN_STYLES[raw] or SIGN_STYLES[1], raw
 	end
 
+	local function laneSettings()
+		local cur = {}
+		pcall(function() cur = params.getCurrentParams() end)
+		return { overwrite = cur[LANE_PARAM] == 2, dedicated = cur[DEDICATED_PARAM] == 2 }
+	end
+
 	-- The game opens the tool's info callout whenever a parameter in the menu's list changes
 	-- (construction.tl changeParam: ScriptParamLocation.Default fires
 	-- "constructionOpenCalloutFromParams"; Toolbar ones fire "constructionSetSuppressCallout" true
@@ -940,6 +1106,8 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				pending:set(true)
 				log("%s from segment %d: %s at %d junctions", p.kind, entity, p.remove and "removing" or "applying",
 					p.remove and p.applied or p.entries)
+				local lanes = laneSettings()
+				log("lanes: overwrite %s, dedicated %s", tostring(lanes.overwrite), tostring(lanes.dedicated))
 				apply(p, function(okCount, failCount)
 					configuredChanged()
 					local style, raw = currentStyle()
@@ -950,7 +1118,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 					message:set(failCount > 0 and string.format("Refused at %d junctions", failCount) or nil)
 					pending:set(false)
 					revision:set(revision:old() + 1)
-				end)
+				end, lanes)
 				return true
 			end,
 			filter = function(entity)
@@ -1003,6 +1171,32 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				key = SIGN_STYLE_PARAM,
 				name = "Sign style",
 				values = { "International", "Norwegian" },
+				defaultIndex = 1,
+				resetOnCategoryChange = false,
+				uiType = api.type.enum.ScriptParamType.ComboBox,
+				yearFrom = 0,
+				yearTo = 0,
+				location = api.type.enum.ScriptParamLocation.Default,
+				preserveValueInAllCategories = true,
+			},
+			{
+				group = LANE_PARAM,
+				key = LANE_PARAM,
+				name = "Overwrite lanes",
+				values = { "No", "Yes" },
+				defaultIndex = 1,
+				resetOnCategoryChange = false,
+				uiType = api.type.enum.ScriptParamType.ComboBox,
+				yearFrom = 0,
+				yearTo = 0,
+				location = api.type.enum.ScriptParamLocation.Default,
+				preserveValueInAllCategories = true,
+			},
+			{
+				group = DEDICATED_PARAM,
+				key = DEDICATED_PARAM,
+				name = "Dedicated turn lanes",
+				values = { "No", "Yes" },
 				defaultIndex = 1,
 				resetOnCategoryChange = false,
 				uiType = api.type.enum.ScriptParamType.ComboBox,

@@ -16,7 +16,7 @@ Results (paired runs, details in the lab's `docs/studies/2026-10-15_traffic-mana
 - **Priority Road tool** (`content/gui/construction/tools/imsvale_priority_road_tool.script.lua`, added 2026-10-16):
   - **Following the road:** hover a road, and the tool follows it through junctions in both directions, always on to the straightest connected road (at most 45° off).
   - **Roundabout or road:** if that comes back to the start it's a loop, and a round loop (all samples within 12% of the mean radius) is a roundabout. Otherwise it's a priority road. The rules are the same either way; the distinction is for entry signs later.
-  - **Phases at each junction:** #1 traffic from the priority road green, 60 s, 0 s minimum, skipping allowed (it ends as soon as the priority road is empty and someone waits). #2 side roads green, plus the exits (priority road onto a side road), 1 s, same.
+  - **Phases at each junction:** #1 traffic from the priority road green, 60 s, 0 s minimum, skipping allowed (it ends as soon as the priority road is empty and someone waits). #2 side roads green, 1 s, same; on roundabouts plus the exits (ring onto a side road). Ordinary junctions leave the exits red in #2 (see below).
     - The side phase needs the short cap: skipping only ends a phase early when its own lanes empty, and a long side queue never empties, so 60 s there would hold the priority road for a minute (run B: the entry phase always ran its full 6 s with 150+ cars queued).
     - #3, only with crosswalks: pedestrians.
   - **Junctions with no side road leading in** (exits only) get no light.
@@ -89,11 +89,55 @@ How the Priority Road tool places signs, what the user saw in game, and what is 
 
 ## Ideas
 
-- **Lane configuration as part of the setup** (to do, user 2026-10-17):
-  - Applying priority / yield also sets the lane connections, roundabouts first. The rules are general for any lane combination, or hard-coded per combination; tested on different combinations later.
+- **Lane configuration as part of the setup** (user 2026-10-17):
+  - Done for ordinary junctions (2026-10-19, see "Lanes at ordinary junctions" below). Roundabouts still to do.
   - The phases must match: every lane connection green in some phase. Otherwise cars choose a lane for a turn its connections allow, never get a green, and are stranded.
   - Lanes and phases go in one proposal.
 
 - Yield sign models: a light type whose models are yield signs instead of shrunk lights. The engine needs some models to keep the light; whether signs work as "light" models (no red/green animation) is untested.
 - A "Make yield" button in the light window: phase #1 green for the connections with `precedence=true`, phase #2 for the rest. The engine already says who should have right of way, so it would work at any junction, not just roundabouts.
 - Phase durations: what works best for the entry phase (short, skipping allowed) is untested beyond the first setup.
+
+## Ordinary junctions (T and 4-way), from the lab (2026-10-19)
+
+Studied in the lab (`../Smart traffic lights/docs/studies/2026-10-18_give-way-junctions.md`) with paired runs on two-lane roads, measuring forced entries (a car entering while one it should give way to is close) and needless waits.
+
+- **Phase #2 without the exits** ("side" in the study) is the best plan found:
+  - At a 4-way the exits (the priority road's turns into the side roads) cross or merge with the side roads' traffic. Leaving them red in #2 cut forced side road entries from 33 to 25 in 15 minutes, at 28% more side road waiting and no cost to the priority road.
+  - At a T it made no difference.
+  - The tool now does this for everything but roundabouts. Roundabouts keep their own plan, unchanged.
+- **Tried and worse:**
+  - more phases: a phase per conflicting side movement, or the side roads' left turns apart. Each phase change adds conflicts: cars still crossing, and priority cars arriving a few seconds after the switch;
+  - priority road movements kept green in the side phase;
+  - a shorter phase #1.
+- **Engine limits, beyond what phases can do:**
+  - A phase holds while anything green in it has traffic, so phase #1 can't end on a gap in just the direction a side road movement conflicts with.
+  - The engine only notices approaching cars a few seconds out: side cars pull out with a priority car about 1.5–4 s away.
+  - About a quarter of the side road's cars at a 4-way still enter forced.
+- **Junctions already set up** keep their old phases until the yielding is removed and applied again with the tool.
+
+- **Phase #2's maximum is a balance knob, not something to optimise** (user, 2026-10-19). Raising it moves throughput to the side road at a small cost to the priority road. 1 s is the default because it gives the clearest yielding. A side road congested at 1 s is a sign the junction needs upgrading to one built for traffic from all directions, not a reason to lengthen the side phase.
+
+## Lanes at ordinary junctions (2026-10-19)
+
+Two opt-in tool settings, both default No:
+- **"Overwrite lanes":** each turn lands in its own lane instead of fanning out into every lane of the road it turns into. Right turns map their lanes curb first onto the road's lanes curb first, left turns median first onto median first. Which lanes turn stays as it was; straight on and U-turns are untouched.
+- **"Dedicated turn lanes"** (only with the first on): straight on is dropped from lanes that turn, as long as another lane still goes straight on.
+
+Every lane still reaches every road it reached before, so routes stay valid. Lanes and phases are set together in one node config proposal.
+
+**Why**, from the lab's paired runs (`../Smart traffic lights/docs/studies/2026-10-18_give-way-junctions.md`, runs 15–25), forced entries:
+
+| Junction | Game lanes | Overwrite | Dedicated |
+|---|---|---|---|
+| 4-lane priority road, 2-lane side roads | 125 | 124 | – |
+| All 4-lane | 161 | 149 | – |
+| 6-lane priority road, 4-lane side roads | 227 | 185 | 184 |
+| All 6-lane | 243 | 220 | 221 |
+
+- **What the lanes fix:** turns that merged into the same lane. The priority road's left turns gain most, about a third fewer forced on wide roads.
+- **What they can't fix:** the side roads' left turns cross the opposite straight-on traffic, so they stay forced nearly every time. That's where a player upgrades to a signalled junction (user).
+- **Dedicated turn lanes:** cost no throughput in these tests. Their known risk is cars changing lanes into a queue that reaches the last upstream node: −32% at the lab's node 2010 (2026-10-15), though with protected-left phases there.
+- **Roundabouts keep their lanes for now** (`PLANS.roundabout.lanes = false`).
+- **Removing the yielding** leaves the rewritten lanes in place.
+
