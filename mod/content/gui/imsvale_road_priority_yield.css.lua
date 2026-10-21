@@ -20,6 +20,21 @@ function data()
 	-- columns so the sliders line up. padding / margin: { top, right, bottom, left }.
 	-- Centred on screen, as the game centres its dialog popovers: without a position the window
 	-- opened in the top left corner every time (2026-10-19).
+	-- The Uninstall window (priority road 48): centred like the old settings window.
+	a("Window!imsvale-uninstall", {
+		anchorPoint = { 0.5, 0.5 },
+		gravity = { 0.5, 0.5 },
+	})
+	a("Window!imsvale-uninstall Window::Content", {
+		padding = { 8, 12, 12, 12 },
+		minSize = { 200, -1 },
+	})
+	a("Button!imsvale-uninstall-button", {
+		margin = { 8, 0, 0, 0 },
+	})
+	a("TextView!imsvale-uninstall-section", {
+		margin = { 12, 0, 0, 0 },
+	})
 	a("Window!imsvale-sign-settings", {
 		anchorPoint = { 0.5, 0.5 },
 		gravity = { 0.5, 0.5 },

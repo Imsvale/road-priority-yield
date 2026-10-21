@@ -18,7 +18,8 @@ Results (paired runs, details in the lab's `docs/studies/2026-10-15_traffic-mana
   - **Roundabout or road:** if that comes back to the start it's a loop, and a round loop (all samples within 12% of the mean radius) is a roundabout. Otherwise it's a priority road. The rules are the same either way; the distinction is for entry signs later.
   - **Phases at each junction:** #1 traffic from the priority road green, 60 s, 0 s minimum, skipping allowed (it ends as soon as the priority road is empty and someone waits). #2 side roads green, 1 s, same; on roundabouts plus the exits (ring onto a side road). Ordinary junctions leave the exits red in #2 (see below).
     - The side phase needs the short cap: skipping only ends a phase early when its own lanes empty, and a long side queue never empties, so 60 s there would hold the priority road for a minute (run B: the entry phase always ran its full 6 s with 150+ cars queued).
-    - #3, only with crosswalks: pedestrians.
+    - Crosswalks are green in both phases (user, 2026-10-20). Until priority road 44 they had a phase #3 of their own; the lab's studies ran with pedestrians green throughout.
+  - **Priority isn't geometry** (user, 2026-10-20): a main road can turn at a near-90° corner where a side road joins, and priority goes on with the main road. So when a priority arm is bulldozed, the junction is dropped (priority signs after it removed) rather than guessing a new priority pair from the shape. The player clicks the road again.
   - **Junctions with no side road leading in** (exits only) get no light.
   - **Click** applies. If every junction already has it, click removes it (preference None, phases reset to the game's default; earlier custom lights are not restored).
   - **Not handled:** the engine's precedence flags. Auto can give a town-road spoke (610) right of way over a native roundabout's one-way ring (410/430), so the road you click is always the priority road.
@@ -141,7 +142,7 @@ Every lane still reaches every road it reached before, so routes stay valid. Lan
 - **Roundabouts have their own rule** (`roundaboutLanes`), not this one.
 - **Removing the yielding** leaves the rewritten lanes in place.
 
-## Follow lane edits (experimental, 2026-10-19)
+## Follow lane edits (2026-10-19; always on since priority road 47, no switch)
 
 A player who edits a yielding junction's lanes by hand can leave connections without a green: new or recreated connections end up red in every phase (lab finding). With the tool's "Follow lane edits" on, the game script watches the junctions the tool set up and rebuilds their phases after a lane edit, keeping the player's lanes. See CLAUDE.md for how it works. Experimental until it proves stable and reliable (user).
 

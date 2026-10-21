@@ -10,13 +10,14 @@ local M = {}
 -- seconds; every phase has a 0 s minimum and may be skipped.
 -- - priority: phase #1; it ends early when the priority road is empty;
 -- - yield: phase #2; short, or a long side queue would hold the priority road (1 s: user, 2026-10-17);
--- - pedestrian: phase #3, only where there are crosswalks;
+-- - crosswalks are green in both phases: no pedestrian phase (user, 2026-10-20; the lab's studies
+--   ran with pedestrians green throughout);
 -- - exitsInYield: exits (priority road onto a side road) also green in phase #2;
 -- - lanes: the lane rule "Overwrite lanes" applies ("roundabout": roundaboutLanes; "junction":
 --   rewriteLanes, with "Dedicated turn lanes"; both in the tool).
 M.PLANS = {
-	roundabout = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = true, lanes = "roundabout" },
-	junction = { priority = 60.0, yield = 1.0, pedestrian = 6.0, exitsInYield = false, lanes = "junction" },
+	roundabout = { priority = 60.0, yield = 1.0, exitsInYield = true, lanes = "roundabout" },
+	junction = { priority = 60.0, yield = 1.0, exitsInYield = false, lanes = "junction" },
 }
 
 -- Phases for one junction, or nil and why not. `a`, `b`: the priority road's segments; `round`:
@@ -49,14 +50,11 @@ function M.junctionStates(node, a, b, cfg, round, conns)
 		return st
 	end
 	local states = {
-		phase(p.priority, function(c) return c and priority[c.segment0] end),
-		phase(p.yield, function(c)
-			return c and (not priority[c.segment0] or (p.exitsInYield and not priority[c.segment1]))
+		phase(p.priority, function(c, cross) return cross ~= nil or priority[c.segment0] end),
+		phase(p.yield, function(c, cross)
+			return cross ~= nil or not priority[c.segment0] or (p.exitsInYield and not priority[c.segment1])
 		end),
 	}
-	if nCross > 0 then
-		states[#states + 1] = phase(p.pedestrian, function(c, cross) return cross ~= nil end)
-	end
 	return states, nil, sideSegs
 end
 

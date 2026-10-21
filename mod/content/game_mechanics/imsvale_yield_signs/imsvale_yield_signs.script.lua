@@ -4,9 +4,10 @@
 -- constructions but become plain assets (ASSET_GROUP) once built, and asset groups can't be
 -- looped over, so the tool keeps their ids here to remove them again (2026-10-18).
 --
--- Junctions and "Follow lane edits" (experimental, 2026-10-19): every junction the tool applied
+-- Junctions and lane edits (2026-10-19; always on since priority road 47, before only with the
+-- tool's "Follow road edits" switch: docs/archive/follow-switch.md): every junction the tool applied
 -- yielding to, with its priority road segments, kind, light type and a fingerprint of its lane
--- connections. With the tool's switch on, every CHECK_EVERY seconds the junctions' lanes are
+-- connections. Every CHECK_EVERY seconds the junctions' lanes are
 -- compared with the fingerprint; a change that stays the same over two checks in a row (the edit
 -- has settled) rebuilds the phases from the new lanes with the same plan (phases module), lanes
 -- untouched. Phase edits alone don't trigger it. A junction drops out when its node or priority
@@ -16,8 +17,8 @@
 --   signs = { ["<node>"] = { ids = { asset ids }, style = "intl" | "no", round = bool } },
 --   diamonds = { ["<node>"] = { asset ids } }: priority signs along a priority road, under the
 --     junction they follow or the road end they start at (2026-10-19),
---   junctions = { ["<node>"] = { a, b, round, typeId, fp, pending } },
---   follow = bool, nextCheck = seconds, t = seconds,
+--   junctions = { ["<node>"] = { a, b, round, typeId, fp, pending, settings, repair (always) | gone | check } },
+--   nextCheck = seconds, t = seconds, (follow = bool: the old switch, ignored since priority road 47)
 -- }
 -- (before 2026-10-18 evening a sign entry was the bare id list; the tool reads both).
 --
@@ -26,8 +27,8 @@
 -- pretends to come from), param.kind saying what it is:
 -- - nil (signs) { node, signs = { ... }, style, round }: an empty list clears the entry;
 -- - "diamonds" { node, ids = { ... } }: an empty list clears the entry;
--- - "junction" { node, a, b, round, typeId, fp } or { node, remove = true };
--- - "follow" { on = bool };
+-- - "junction" { node, a, b, round, typeId, fp, settings } or { node, remove = true };
+-- - "reset" {}: the tool's Uninstall removed everything; all records go;
 -- - "diamondSettings" { values = { start, startHalf, repeatAt, jitter, minGap } }: the priority
 --   sign settings, per save.
 -- One event for all: a save keeps the subscriptions it was saved with (GameScript.eventSubscriptions
@@ -41,13 +42,17 @@
 -- (GameScript.eventSubscriptions is part of the component, 2026-10-19), so later additions use a
 -- flag in the state, saved along with them (buildSubscribed).
 --
--- Follow road edits (experimental, 2026-10-19; with "follow" on): a road type change replaces the
+-- Road edits (2026-10-19; always since priority road 47): a road type change replaces the
 -- segments and resets the node configs, our light included (lab findings, "Road upgrades").
 -- - Engine part, the game's build events ("apply_command"): before a build, the removed segments
 --   that end at a registered junction (priority or side road) are recorded with their nodes and
 --   their direction at each end (s.replaced); after it, priority segments are matched to their
 --   replacements (same two nodes, else the new segment at the junction pointing the same way: a
---   split), and every junction touched is marked `repair`. Lane following skips junctions awaiting repair.
+--   split), and every junction touched is marked: `gone` when its node is gone or a priority
+--   segment was removed without a replacement (bulldozed); else `repair` (a side road removed or
+--   replaced, or a priority segment replaced: the tool drops the junction if it can't yield any
+--   more). Each edit is logged ("road edit at node ..."), so a test's log says what
+--   was done. Lane following skips marked junctions.
 -- - GUI part: the Priority Road tool's FollowRoadEdits (mounted all session through the game's
 --   ModEntryPointExtension) reads the marks from this state and applies the yielding again with the
 --   settings it was applied with (lights, lanes, signs), re-registering each junction, which clears
@@ -134,25 +139,47 @@ local function afterBuild(s, street)
 	end
 	for key, j in pairs(s.junctions or {}) do
 		local node = tonumber(key)
-		local touched = false
+		local touched, lost, sideRemoved = false, false, false
+		local priority = {}
 		for _, field in ipairs({ "a", "b" }) do
-			local old = j[field] and s.replaced[tostring(j[field])]
+			local segKey = j[field] and tostring(j[field])
+			local old = segKey and s.replaced[segKey]
 			if old and node then
+				priority[segKey] = true
 				local new = replacement(old, node)
 				if new then
-					log("follow road edits: node %d segment %d replaced by %d", node, j[field], new)
+					log("road edit at node %d: priority segment %d replaced by %d", node, j[field], new)
 					j[field] = new
+				else
+					log("road edit at node %d: priority segment %d removed", node, j[field])
+					lost = true
 				end
 				touched = true
 			end
 		end
-		-- A side road replaced: same priority segments, but the node config was reset.
-		for _, old in pairs(s.replaced) do
-			if old.node0 == node or old.node1 == node then touched = true end
+		for segKey, old in pairs(s.replaced) do
+			if node and not priority[segKey] and (old.node0 == node or old.node1 == node) then
+				touched = true
+				local new = replacement(old, node)
+				if new then
+					log("road edit at node %d: side segment %s replaced by %d", node, segKey, new)
+				else
+					log("road edit at node %d: side segment %s removed", node, segKey)
+					sideRemoved = true
+				end
+			end
 		end
 		if touched then
-			j.repair = true
+			local mark
+			if lost or not node or not api.engine.entityExists(node) then
+				j.gone, mark = true, "gone"
+			elseif sideRemoved then
+				j.repair, mark = true, "repair (side road removed)"
+			else
+				j.repair, mark = true, "repair"
+			end
 			j.pending = nil
+			log("road edit at node %s: marked %s", key, mark)
 		end
 	end
 	s.replaced = nil
@@ -186,12 +213,13 @@ local function follow(s)
 		local node = tonumber(key)
 		local why = "bad entry"
 		if node then why = gone(node, j) end
-		if j.repair and why ~= "node gone" then why = false end -- awaiting repair: leave it alone
+		local marked = j.repair or j.gone or j.check
+		if marked then why = false end -- the tool handles it (and removes its signs)
 		if why then
 			log("follow lane edits: node %s dropped (%s)", key, why)
 			s.junctions[key] = nil
-		elseif j.repair then
-			-- the tool's repair re-registers it
+		elseif marked then
+			-- the tool repairs, drops or checks it
 		else
 			local fp = phases.fingerprint(api.engine.getComponent(node, CT.BASE_NODE_CONFIG))
 			if fp == j.fp then
@@ -224,7 +252,6 @@ local function update(_userParams, state, dt)
 		state:set(s)
 	end
 	if dt <= 0 then return end
-	if not s.follow then return end
 	if not phasesOk then
 		if s.lastError ~= "module" then log("follow lane edits: phases module failed to load: %s", tostring(phases)) end
 		s.lastError = "module"
@@ -246,7 +273,7 @@ end
 local function handleEvent(_userParams, state, _src, id, name, param)
 	if id == "apply_command" and (name == "onPreBuildProposal" or name == "onPostBuildProposal") then
 		local s = state:get() or {}
-		if not s.follow or not s.junctions then return end
+		if not s.junctions or next(s.junctions) == nil then return end
 		local ok, err = pcall(function()
 			local street = param[1] and param[1].proposal
 			if not street then return end
@@ -281,16 +308,15 @@ local function handleEvent(_userParams, state, _src, id, name, param)
 			s.junctions[key] = { a = param.a, b = param.b, round = param.round or false, typeId = param.typeId, fp = param.fp,
 				settings = type(param.settings) == "table" and param.settings or nil }
 		end
+	elseif kind == "reset" then
+		s.signs, s.diamonds, s.junctions, s.replaced = nil, nil, nil, nil
+		log("uninstall: records cleared")
 	elseif kind == "diamondSettings" and type(param.values) == "table" then
 		local v = {}
 		for k, x in pairs(param.values) do
 			if type(x) == "number" then v[k] = x end
 		end
 		s.diamondSettings = v
-	elseif kind == "follow" then
-		local on = param.on == true
-		if on ~= (s.follow == true) then log("follow lane edits: %s", on and "on" or "off") end
-		s.follow = on
 	else
 		return
 	end

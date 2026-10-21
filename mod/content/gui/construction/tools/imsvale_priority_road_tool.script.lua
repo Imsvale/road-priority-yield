@@ -30,8 +30,8 @@
 --   junctions the exits stay red in #2: at a 4-way the priority road's turns cross or merge
 --   with the side roads' traffic (lab study, paired runs 2026-10-19: forced side road entries
 --   33 -> 25, priority road unaffected; at a T no difference);
--- - phase #3, only with crosswalks: crosswalks green (the plan's pedestrian maximum, skipping
---   allowed).
+-- - crosswalks green in both phases, no pedestrian phase (user, 2026-10-20; until priority
+--   road 44 a phase #3 for them).
 -- Junctions where no side road leads in (exits only) get no light.
 --
 -- Lanes (opt-in; see LANE_PARAM): "Overwrite lanes" sets each junction's lanes by its plan's
@@ -52,7 +52,7 @@ local color_util = ug_require "::/gui/main/color_util.tl"
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 42 (follow road edits from a mod entry point)"
+local VERSION = "priority road 56 (placeholder search borrows a bounding box)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -274,6 +274,41 @@ local function invisibleType()
 		if file:find(LIGHT_TYPE, 1, true) then lightTypeId = id return id end
 	end
 	return nil
+end
+
+-- The game's own Type A, for every light we take off: a node keeps its light type as an index
+-- into the type list even without a light, and without this mod our index points past the end,
+-- which crashed the game when the road tool rebuilt such a node (2026-10-20).
+-- The base game has four types (base/content/infrastructure/traffic_light.zip): traffic_light_a /
+-- _c for temperate and subarctic, traffic_light_dry_a / _dry_c for dry and tropical, indices 0-3
+-- in every save whatever its climate (the junction window shows only the climate's). So: the
+-- Type A for the save's climate, else any Type A, else index 0 (user, 2026-10-21).
+local baseTypeId = nil
+local function baseLightType()
+	if baseTypeId then return baseTypeId end
+	local ours = invisibleType()
+	local rep = api.res.trafficLightTypeRep
+	local climate = ""
+	pcall(function() climate = tostring(api.res.getBaseConfig().climate) end)
+	local anyA = nil
+	pcall(function()
+		for id, name in pairs(rep.getAll(true)) do
+			local file = tostring(name):match("([^/\\]+)$") or ""
+			if id ~= ours and file:match("^traffic_light[%w_]*_a%.trl") then
+				local fits = false
+				pcall(function()
+					for _, cat in ipairs(rep.get(id).categoryList.categories) do
+						if cat == "all.clima" or climate:find(cat, 1, true) then fits = true end
+					end
+				end)
+				if fits and (baseTypeId == nil or id < baseTypeId) then baseTypeId = id end
+				if anyA == nil or id < anyA then anyA = id end
+			end
+		end
+	end)
+	baseTypeId = baseTypeId or anyA or 0
+	log("lights we take off get type %d (climate %s)", baseTypeId, climate)
+	return baseTypeId
 end
 
 local junctionStates = phases.junctionStates -- (node, a, b, cfg, round, conns)
@@ -706,6 +741,7 @@ local function apply(plan, done, lanes, onJob)
 			if j.removeHere then
 				local tl = cfg.trafficLightConfig:clone()
 				tl.states = {}
+				tl.trafficLightType = baseLightType()
 				jobs[#jobs + 1] = { node = j.node, tl = tl, pref = api.type.enum.TrafficLightPreference.NO, remove = true }
 			end
 		elseif j.states then
@@ -777,7 +813,10 @@ local SIGN_STYLE_PARAM = "imsvaleSignStyle"
 -- 2026-10-19): a player who doesn't look at the settings never loses their own lane work.
 local LANE_PARAM = "imsvaleOverwriteLanes"
 local DEDICATED_PARAM = "imsvaleDedicatedTurnLanes"
-local FOLLOW_PARAM = "imsvaleFollowLaneEdits" -- checkbox, as the lane settings
+-- "Uninstall" (checkbox, General; priority road 48, 2026-10-20): while ticked, a window counts what
+-- the mod has placed in the save and offers to remove all of it (removeAll), so the mod can be
+-- disabled safely. A tool can't offer a plain button (../docs/GUI.md), hence the window.
+local UNINSTALL_PARAM = "imsvaleUninstall"
 -- Tabs (user, 2026-10-19), as the game's road tool switches its panel with icon buttons at the
 -- top: SECTION_PARAM picks General / Roundabouts / Priority signs, and every other parameter is
 -- shown only under its tab (checkEnabledFn returning "Hidden", as the game's street builder
@@ -855,10 +894,6 @@ local function registerJunction(job, settings)
 	end
 	param.kind = "junction"
 	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, param))
-end
-
-local function sendFollow(on)
-	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, { kind = "follow", on = on }))
 end
 
 local function signFile(style, round)
@@ -1439,6 +1474,7 @@ end
 -- - Re-projected every step, so the icons follow the camera.
 -- param: planIcons (the hovered road's preview), planNodes (its junctions, whose configured
 -- icons the preview replaces). The sign style comes from iconStyle.
+local UninstallPresence -- (param { gameCtx }): defined with Uninstall below, mounted here
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
 	react.setMouseTransparent(true)
 
@@ -1542,6 +1578,17 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 			end
 		end
 	end
+	-- Uninstall's window: its presence is mounted inside this overlay, because an action may have
+	-- only one FullScreenComponent ("Must not specify more than 1 FullScreenComponent", a crash,
+	-- 2026-10-20).
+	if UninstallPresence and param.gameCtx then
+		children[#children + 1] = builtin.FloatingLayoutChild{
+			localKey = "uninstall",
+			h = 0,
+			v = 0,
+			item = UninstallPresence({ gameCtx = param.gameCtx }),
+		}
+	end
 	return builtin.FloatingLayout{ meta = { mouseTransparent = true }, children = children }
 end)
 
@@ -1560,7 +1607,280 @@ local function panel(params)
 	return seenParams
 end
 local diamondWatch = {} -- the sliders' values last seen, and steps since they changed (GUI module state)
-local lastFollow = nil -- "Follow lane edits" last sent
+
+---------------------------------------------------------------------------
+-- Uninstall (priority road 48, 2026-10-20)
+---------------------------------------------------------------------------
+-- Removing the mod from a save leaves every sign a placeholder box and every junction on our
+-- light type, which crashes the game when it rebuilds one (docs/release-checklist.md, item 2).
+-- removeAll takes it all out first: every node on our light type (found by scanning all street
+-- nodes, not the registry, which may be incomplete) gets its light removed and the game's own type;
+-- every recorded sign goes; the game script's records are cleared. Lanes stay as they are.
+
+-- What the mod has in the save: nodes on our light type, recorded sign assets.
+local function uninstallCounts()
+	local typeId = invisibleType()
+	local nodes = {}
+	if typeId then
+		for node in pairs(api.engine.system.streetSystem.getNode2SegmentMap()) do
+			local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
+			if cfg and cfg.trafficLightConfig.trafficLightType == typeId then nodes[#nodes + 1] = node end
+		end
+	end
+	local signs = 0
+	for _, entry in pairs(storedSigns()) do
+		for _, e in ipairs(entry.ids or {}) do
+			if api.engine.entityExists(e) then signs = signs + 1 end
+		end
+	end
+	for _, ids in pairs(storedDiamonds()) do
+		for _, e in ipairs(type(ids) == "table" and ids or {}) do
+			if api.engine.entityExists(e) then signs = signs + 1 end
+		end
+	end
+	return nodes, signs
+end
+
+local function removeAll()
+	local nodes = uninstallCounts()
+	local base, refused = baseLightType(), 0
+	for _, node in ipairs(nodes) do
+		local ok, err = pcall(function()
+			local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
+			local tl = cfg.trafficLightConfig:clone()
+			tl.states = {}
+			tl.trafficLightType = base
+			send(node, tl, api.type.enum.TrafficLightPreference.NO, function(success)
+				if not success then
+					refused = refused + 1
+					log("uninstall: node %d refused", node)
+				end
+			end)
+		end)
+		if not ok then log("uninstall: node %d: %s", node, tostring(err)) end
+	end
+	local ids = 0
+	for _, entry in pairs(storedSigns()) do
+		removeSigns(entry.ids)
+		ids = ids + #(entry.ids or {})
+	end
+	for _, list in pairs(storedDiamonds()) do
+		if type(list) == "table" then
+			removeSigns(list)
+			ids = ids + #list
+		end
+	end
+	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, { kind = "reset" }))
+	configuredChanged()
+	log("uninstall: %d junctions, %d signs", #nodes, ids)
+end
+
+local UNINSTALL_RECOUNT = 60 -- steps between counts while the window is open
+
+-- Placeholders (priority road 55, 2026-10-21; user: a universal cleanup, two steps like Traffic
+-- Light Tools' Remove all): every asset group in the world whose models are all placeholders.
+-- A model the game can't load (its mod removed) is shown as a placeholder model, whose file is
+-- under ::/placeholders/ (as base/model_metadata_util.lua tells them apart). They can't be traced
+-- back to the model they replace, so this takes every mod's, not just ours. Asset groups can't be
+-- looped over: the world is searched with the octree (one box over everything). A group holding
+-- placeholders among real models (e.g. a forest with one missing tree model) is only counted.
+local PLACEHOLDER_PREFIX = "::/placeholders/"
+local WORLD_EXTENT = 100000 -- m, half the search box's side; far beyond any map
+local REMOVE_BATCH = 200    -- asset groups per removal command
+local placeholders = { ids = nil, mixed = 0, error = nil } -- the last search (GUI module state)
+
+local function findPlaceholders()
+	local isPlaceholder = {} -- model id -> bool, cached
+	local function placeholder(modelId)
+		local v = isPlaceholder[modelId]
+		if v == nil then
+			local name = ""
+			pcall(function() name = tostring(api.res.modelRep.getName(modelId)) end)
+			v = name:sub(1, #PLACEHOLDER_PREFIX) == PLACEHOLDER_PREFIX
+			isPlaceholder[modelId] = v
+		end
+		return v
+	end
+	local ids, mixed, seen = {}, 0, {}
+	-- api.type.Box3f is nil in GUI scripts and the console (2026-10-21), and the game's scripts
+	-- never build one; they read them from BOUNDING_VOLUME. So borrow one from any entity that has
+	-- a bounding volume (a street segment, else a construction) and stretch it over the world.
+	local box = nil
+	if api.type.Box3f then box = api.type.Box3f.new() end
+	local function borrow(entity)
+		if box then return end
+		local bv = api.engine.getComponent(entity, CT.BOUNDING_VOLUME)
+		if bv and bv.bbox then box = bv.bbox end
+	end
+	for _, segs in pairs(api.engine.system.streetSystem.getNode2SegmentMap()) do
+		for _, seg in ipairs(segs) do borrow(seg) end
+		if box then break end
+	end
+	if not box then
+		for _, e in ipairs(api.engine.getEntitiesWithComponent(CT.CONSTRUCTION)) do
+			borrow(e)
+			if box then break end
+		end
+	end
+	if not box then error("no bounding box to borrow") end
+	box.min = api.type.Vec3f.new(-WORLD_EXTENT, -WORLD_EXTENT, -WORLD_EXTENT)
+	box.max = api.type.Vec3f.new(WORLD_EXTENT, WORLD_EXTENT, WORLD_EXTENT)
+	api.engine.system.octreeSystem.findIntersectingEntities(box, function(entity)
+		if seen[entity] then return end
+		seen[entity] = true
+		if not api.engine.getComponent(entity, CT.ASSET_GROUP) then return end
+		local list = api.engine.getComponent(entity, CT.MODEL_INSTANCE_LIST)
+		if not list then return end
+		local total, found = 0, 0
+		for _, inst in ipairs(list.fatInstances or {}) do
+			total = total + 1
+			if placeholder(inst.modelId) then found = found + 1 end
+		end
+		for _, inst in ipairs(list.thinInstances or {}) do
+			total = total + 1
+			if placeholder(inst.modelId) then found = found + 1 end
+		end
+		if found > 0 and found == total then
+			ids[#ids + 1] = entity
+		elseif found > 0 then
+			mixed = mixed + 1
+		end
+	end)
+	log("placeholders: %d asset groups, %d more mixed with other models (left alone)", #ids, mixed)
+	return ids, mixed
+end
+
+local function removePlaceholders(ids)
+	for i = 1, #ids, REMOVE_BATCH do
+		local list = {}
+		for k = i, math.min(#ids, i + REMOVE_BATCH - 1) do
+			if api.engine.entityExists(ids[k]) then list[#list + 1] = ids[k] end
+		end
+		if #list > 0 then
+			local proposal = api.type.Proposal.new()
+			proposal.toRemove = list
+			api.cmd.sendCommand(api.cmd.makeWorldBuildProposalCmd(proposal, nil, true, false), function(_, success)
+				if not success then log("placeholders: removal of %d refused", #list) end
+			end)
+		end
+	end
+	log("placeholders: removing %d", #ids)
+end
+
+local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallContent", function()
+	local counts = react.useState(nil)
+	local steps = react.useRef(0)
+	react.onStep(function()
+		local n = steps:get()
+		steps:set(n + 1)
+		if n % UNINSTALL_RECOUNT ~= 0 then return end
+		local ok, nodes, signs = pcall(uninstallCounts)
+		if ok then
+			local c = { junctions = #nodes, signs = signs }
+			local old = counts:old()
+			if not old or old.junctions ~= c.junctions or old.signs ~= c.signs then counts:set(c) end
+		end
+	end)
+	local c = counts:old() or { junctions = 0, signs = 0 }
+	local found = react.useState(0) -- bumped after each search or removal, to redraw
+	local rows = {
+		builtin.TextView{ meta = { class = "imsvale-setting-row" }, text = string.format("Junctions: %d", c.junctions) },
+		builtin.TextView{ meta = { class = "imsvale-setting-row" }, text = string.format("Signs: %d", c.signs) },
+		builtin.Button{
+			meta = { class = "imsvale-setting-button, imsvale-uninstall-button" },
+			content = builtin.TextView{ text = "Remove all" },
+			onClick = function()
+				local ok, err = pcall(removeAll)
+				if not ok then log("uninstall failed: %s", tostring(err)) end
+				steps:set(1) -- recount after the commands have had a moment
+			end,
+		},
+	}
+	-- Placeholders: Find, then Remove (N).
+	local text
+	if placeholders.error then
+		text = "Placeholders: search failed"
+	elseif placeholders.ids == nil then
+		text = "Placeholders: ?"
+	else
+		text = string.format("Placeholders: %d", #placeholders.ids)
+	end
+	rows[#rows + 1] = builtin.TextView{ meta = { class = "imsvale-uninstall-section" }, text = text }
+	if placeholders.ids and #placeholders.ids > 0 then
+		rows[#rows + 1] = builtin.Button{
+			meta = { class = "imsvale-setting-button, imsvale-uninstall-button" },
+			content = builtin.TextView{ text = string.format("Remove %d", #placeholders.ids) },
+			onClick = function()
+				local ok, err = pcall(removePlaceholders, placeholders.ids)
+				if not ok then log("placeholders: %s", tostring(err)) end
+				placeholders.ids = nil
+				found:set(found:old() + 1)
+			end,
+		}
+	else
+		rows[#rows + 1] = builtin.Button{
+			meta = { class = "imsvale-setting-button, imsvale-uninstall-button" },
+			content = builtin.TextView{ text = "Find" },
+			onClick = function()
+				local ok, ids, mixed = pcall(findPlaceholders)
+				if ok then
+					placeholders.ids, placeholders.mixed, placeholders.error = ids, mixed, nil
+				else
+					placeholders.ids, placeholders.error = nil, tostring(ids)
+					log("placeholders: search failed: %s", tostring(ids))
+				end
+				found:set(found:old() + 1)
+			end,
+		}
+	end
+	return builtin.BoxLayout{ orientation = builtin.type.Orientation.Vertical, children = rows }
+end)
+
+-- The window's state (GUI module state): `wanted` is the checkbox as the action last read it,
+-- `dismissed` the window's X (until the box is unticked), `open` whether it's up.
+local uninstall = { wanted = false, dismissed = false, open = false, wc = nil }
+
+local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstallWindow", builtin.Window, function(param)
+	return builtin.Window{
+		meta = { class = "imsvale-uninstall" },
+		title = "Uninstall",
+		closable = true,
+		onClose = function() uninstall.dismissed = true end,
+		movable = true,
+		content = UninstallContent{},
+	}
+end)
+
+local function closeUninstall()
+	if uninstall.open and uninstall.wc then
+		pcall(function() uninstall.wc.removeAllWindows(UninstallWindow) end)
+	end
+	uninstall.open = false
+end
+
+-- Mounted in the icon overlay for as long as the tool is in use. Each step it follows the
+-- checkbox: ticked opens the window, unticked or the window's X closes it; unmounting (the tool
+-- closed) closes it too. Mounting it only while ticked didn't close the window on untick
+-- (priority road 49-52, 2026-10-21): the overlay's param isn't refreshed by a panel change alone.
+UninstallPresence = react.RegisterRecipe("ImsvaleRoadPriorityUninstallPresence", function(param)
+	react.setMouseTransparent(true)
+	react.onMount(function()
+		pcall(function() uninstall.wc = param.gameCtx.windowContainer:get():getApi() end)
+		if not uninstall.wc then log("uninstall: no window container") end
+	end)
+	react.onStep(function()
+		if not uninstall.wanted then uninstall.dismissed = false end
+		local show = uninstall.wanted and not uninstall.dismissed
+		if show and not uninstall.open and uninstall.wc then
+			local ok, err = pcall(function() uninstall.wc.addSingletonWindow(UninstallWindow, {}) end)
+			if ok then uninstall.open = true else log("uninstall window: %s", tostring(err)) end
+		elseif not show and uninstall.open then
+			closeUninstall()
+		end
+	end)
+	react.onUnmount(closeUninstall)
+	return builtin.FloatingLayout{ meta = { mouseTransparent = true }, children = {} }
+end)
 
 local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", function(params)
 	local revision = react.useState(0)
@@ -1580,12 +1900,6 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			exitStyle = cur[EXIT_PARAM] == 2 and "B" or "A" }
 	end
 
-	local function followSetting()
-		local on = false
-		pcall(function() on = panel(params)[FOLLOW_PARAM] == 2 end)
-		return on
-	end
-
 	-- The game opens the tool's info callout whenever a parameter in the menu's list changes
 	-- (construction.tl changeParam: ScriptParamLocation.Default fires
 	-- "constructionOpenCalloutFromParams"; Toolbar ones fire "constructionSetSuppressCallout" true
@@ -1602,6 +1916,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 	-- A change of the drop-down restyles the existing signs (not on the first look).
 	react.onStep(function()
+		pcall(function() uninstall.wanted = panel(params)[UNINSTALL_PARAM] == 2 end)
 		if suppressNextStep:get() then
 			suppressNextStep:set(false)
 			react.fireEvent(nil, "constructionSetSuppressCallout", true)
@@ -1636,12 +1951,6 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		end
 		lastStyle = style
 		iconStyle = style
-		-- The switch as shown, sent on the first look and on every change.
-		local follow = followSetting()
-		if follow ~= lastFollow then
-			local ok, err = pcall(sendFollow, follow)
-			if ok then lastFollow = follow else log("follow lane edits: %s", tostring(err)) end
-		end
 	end)
 
 	react.setForceFocusable(true)
@@ -1670,13 +1979,15 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		local children = {}
 		if plan then
 			local edges = {}
-			local blue = color_util.withTransparency(constructionColors.Modifier.Valid, 0.75)
+			-- The priority road (and the road about to lose it) as the game's road tool draws a
+			-- hovered road: width 3.06, half opaque (user, 2026-10-21; compared on screenshots).
+			local blue = color_util.withTransparency(constructionColors.Modifier.Valid, 0.5)
 			local gold = color_util.withTransparency(constructionColors.Bulldozer, 0.75)
-			local removing = color_util.withTransparency(constructionColors.Bulldozer, 0.75)
+			local removing = color_util.withTransparency(constructionColors.Bulldozer, 0.5)
 			for _, s in ipairs(plan.remove and (plan.removeSegs or {}) or plan.segs) do
 				local e = builtin.type.EdgeRenderable.Edge.new(segmentGeometry(s))
 				e.colors = { plan.remove and removing or blue }
-				e.width = 1.5
+				e.width = 3.06
 				e.offsetZ = 0.5
 				e.stepSize = 2
 				edges[#edges + 1] = e
@@ -1695,10 +2006,16 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		end
 		children[#children + 1] = builtin.FullScreenComponent{
 			recipe = IconOverlay,
-			param = { planIcons = plan and plan.icons or {}, planNodes = plan and plan.nodes or {} },
+			param = { planIcons = plan and plan.icons or {}, planNodes = plan and plan.nodes or {},
+				gameCtx = params.gameCtx },
 		}
 
+		-- No hover outline: the lines above show what a click does (user, 2026-10-21).
+		local none = color_util.withTransparency(constructionColors.Modifier.Valid, 0)
 		children[#children + 1] = builtin.Selector{
+			selectionColor = none,
+			selectionOutlineColor = none,
+			selectionOutlineColor1 = none,
 			onHover = function(entity)
 				local s = isEdge(entity) and entity or nil
 				if s ~= hovered:old() then hovered:set(s) end
@@ -1733,15 +2050,11 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				end, lanes, function(job, success)
 					if success then registerJunction(job, applied) end
 				end)
-				pcall(sendFollow, followSetting())
 				return true
 			end,
 			filter = function(entity)
 				return isEdge(entity)
 			end,
-			selectionColor = color_util.toVec4(selectionGres.default.selectionColor),
-			selectionOutlineColor = color_util.withTransparency(selectionGres.default.selectionOutlineColor, transparency.Low),
-			selectionOutlineColor1 = color_util.toVec4(selectionGres.default.selectionOutlineColor),
 		}
 
 		-- Tooltip: kept to a word or a short reason; the highlights and icons show the rest.
@@ -1769,13 +2082,113 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	params.setActionFn(actionFn, "imsvale_priority_road_" .. tostring(revision:old()))
 end)
 
--- Repair after a road edit (experimental "Follow road edits", 2026-10-19). Called by FollowRoadEdits
--- below, which watches the game script's state for junctions it marked for repair.
--- todo: { { node, a, b, round, typeId, settings }, ... }, the junctions whose segments a build
--- replaced (the game script has already moved a / b to the new segments). Each junction gets its
--- yielding again with the settings it was applied with (light, phases, lanes, yield signs) and is
--- re-registered; then the affected roads' priority signs are placed again. Priority signs stored
--- under a segment that no longer exists are removed first: they stood beside the old road.
+-- A junction that can't yield any more (bulldozed, or no side road left): our light goes (if the
+-- node is still there with our light type), its yield signs go, and it's unregistered.
+-- roadEnds: a priority segment is gone, so the priority road ends here; the priority signs after
+-- this junction (keys "<node>:<segment>") go too (user, 2026-10-20: a priority road ending at a T
+-- whose through road yields isn't a thing). And for each remaining priority segment (`segs`): if
+-- the road it belongs to has no yielding junction left, all its priority signs go, the start sign
+-- at its far end included (priority road 46). Without roadEnds (no side road left, the road goes
+-- on through a plain node) they stay.
+-- Road edits: the watcher's state (FollowRoadEdits below; repair checks `handed`).
+local FOLLOW_EVERY = 30
+-- After a hand-over, wait this many steps before the next: a repair's commands and sign
+-- placements answer asynchronously, and a drop handed over meanwhile (the junction bulldozed
+-- right after an edit) raced it: the repair put signs back after the drop had cleared them
+-- (priority road 46, 2026-10-20).
+local FOLLOW_SETTLE = 120
+local follow = { steps = 0, handed = {}, settle = 0 } -- GUI module state
+
+-- The junctions registered in the game script's state, by node (string keys).
+local function registeredJunctions()
+	local ok, j = pcall(function()
+		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(SIGN_GAME_SCRIPT)
+		local comp = entity and api.engine.getComponent(entity, CT.GAME_SCRIPT)
+		return comp and comp.state and comp.state.junctions
+	end)
+	return ok and type(j) == "table" and j or {}
+end
+
+local function drop(node, why, typeId, roadEnds, segs)
+	log("follow road edits: node %s dropped (%s)", tostring(node), why)
+	local old = storedSigns()[tostring(node)]
+	if old then
+		removeSigns(old.ids)
+		storeSigns(node, {})
+	end
+	if roadEnds then
+		local prefix = tostring(node) .. ":"
+		for key, ids in pairs(storedDiamonds()) do
+			if tostring(key):sub(1, #prefix) == prefix and type(ids) == "table" then
+				removeSigns(ids)
+				storeDiamonds(key, {})
+			end
+		end
+		local registered = registeredJunctions()
+		for _, seg in ipairs(segs or {}) do
+			if isEdge(seg) then
+				local ok, err = pcall(function()
+					-- The road on from this segment, both ways (the straightest road at each node,
+					-- as the tool follows a road; planFrom returns nothing for a road with no
+					-- junctions left).
+					local chain, nodes = { [seg] = true }, {}
+					local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+					for _, start in ipairs({ e.node0, e.node1 }) do
+						nodes[start] = true
+						local more, passed = walk(seg, start, nil, { [seg] = true })
+						for _, x in ipairs(more) do chain[x] = true end
+						for _, p in ipairs(passed) do nodes[p.node] = true end
+						for _, x in ipairs(more) do
+							local xe = api.engine.getComponent(x, CT.BASE_EDGE)
+							if xe then nodes[xe.node0] = true nodes[xe.node1] = true end
+						end
+					end
+					for n in pairs(nodes) do
+						-- this junction is being unregistered: it doesn't count
+						if n ~= node and registered[tostring(n)] then return end
+					end
+					local count = 0
+					for key, ids in pairs(storedDiamonds()) do
+						local s = tonumber(tostring(key):match(":(%d+)$") or "")
+						if s and chain[s] and type(ids) == "table" then
+							removeSigns(ids)
+							storeDiamonds(key, {})
+							count = count + 1
+						end
+					end
+					log("follow road edits: no yielding junction left on the road at segment %d: %d priority sign entries removed", seg, count)
+				end)
+				if not ok then log("follow road edits: priority signs at segment %d: %s", seg, tostring(err)) end
+			end
+		end
+	end
+	if node and api.engine.entityExists(node) then
+		local ok, err = pcall(function()
+			local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
+			if cfg and typeId and cfg.trafficLightConfig.trafficLightType == typeId then
+				local tl = cfg.trafficLightConfig:clone()
+				tl.states = {}
+				tl.trafficLightType = baseLightType()
+				send(node, tl, api.type.enum.TrafficLightPreference.NO, function(success)
+					if not success then log("follow road edits: node %d: light removal refused", node) end
+				end)
+			end
+		end)
+		if not ok then log("follow road edits: node %d: %s", node, tostring(err)) end
+	end
+	registerJunction({ node = node, remove = true })
+end
+
+-- After a road edit, for the junctions the game script marked (see FollowRoadEdits below).
+-- todo: { { node, a, b, round, typeId, settings, mode }, ... }; a / b are already the new segments.
+-- - mode "drop": bulldozed (node gone, or a priority segment removed without a replacement).
+-- - mode "repair" (always, since priority road 47; before, only with the "Follow road edits"
+--   switch on: docs/archive/follow-switch.md): the junction gets its yielding
+--   again with the settings it was applied with (light, phases, lanes, yield signs) and is
+--   re-registered; then the affected roads' priority signs are placed again. If it can't yield
+--   any more (no side road left), it's dropped.
+-- Priority signs stored under a segment that no longer exists are removed first: they stood
+-- beside the old or removed road.
 local function repair(todo)
 	local typeId = invisibleType()
 	if not typeId then log("follow road edits: the Yield (invisible) light type wasn't found") return end
@@ -1790,10 +2203,14 @@ local function repair(todo)
 	local roads = {}
 	for _, item in ipairs(todo) do
 		local node, settings = item.node, type(item.settings) == "table" and item.settings or {}
-		if node and api.engine.entityExists(node) and isEdge(item.a) and isEdge(item.b) then
+		if item.mode == "drop" then
+			drop(node, "its road was removed", typeId, true, { item.a, item.b })
+		elseif node and api.engine.entityExists(node) and isEdge(item.a) and isEdge(item.b) then
 			local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
 			local states, why, sideSegs = junctionStates(node, item.a, item.b, cfg, item.round)
-			if states then
+			if not states then
+				drop(node, tostring(why), typeId)
+			else
 				local j = { node = node, a = item.a, b = item.b, states = states, has = true,
 					new = { [item.a] = "priority", [item.b] = "priority" } }
 				for seg in pairs(sideSegs) do j.new[seg] = "yield" end
@@ -1803,17 +2220,18 @@ local function repair(todo)
 				local style = settings.style or SIGN_STYLES[1]
 				apply(plan, function(okCount)
 					log("follow road edits: node %d %s", node, okCount > 0 and "repaired" or "repair refused")
+					-- Signs only for a repair that went through and wasn't overtaken by a later
+					-- mark (e.g. the junction bulldozed meanwhile: its drop handles the signs).
+					if okCount == 0 or follow.handed[tostring(node)] ~= "repair" then return end
 					local ok, err = pcall(updateSigns, plan, style)
 					if not ok then log("follow road edits: signs at node %d: %s", node, tostring(err)) end
 				end, lanes, function(job, success)
 					if success then registerJunction(job, settings) end
 				end)
 				if not item.round then roads[#roads + 1] = { seg = item.a, diamonds = settings.diamonds } end
-			else
-				log("follow road edits: node %d not repaired (%s)", node, tostring(why))
 			end
 		else
-			log("follow road edits: node %s not repaired (its node or segments are gone)", tostring(node))
+			drop(node, "its node or priority road is gone", typeId, true, { item.a, item.b })
 		end
 	end
 	-- Priority signs: each affected road once, with the settings it was applied with.
@@ -1836,31 +2254,35 @@ end
 
 -- Mounted for the whole session through the game's ModEntryPointExtension (plugin resource
 -- gui/imsvale_follow_road_edits.res.lua), whether or not the tool is open. Every FOLLOW_EVERY steps
--- it reads the yield game script's state and hands junctions marked `repair` to repair(), each
--- once per session (repair re-registers them, which clears the mark). The game script's own
+-- it reads the yield game script's state and hands marked junctions to repair(), each once per
+-- session and mark (a junction marked `gone` while its repair was under way is handed over
+-- again; priority road 46). repair re-registers or unregisters them, which clears the mark:
+-- `gone` to drop, any other mark to repair (always, since priority road 47). The game script's own
 -- guiUpdate couldn't do this: game scripts run in their own environment and don't see the tool's
 -- code (2026-10-20).
-local FOLLOW_EVERY = 30
-local follow = { steps = 0, handed = {} } -- GUI module state
 local function followRoadEdits()
 	local ok, s = pcall(function()
 		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(SIGN_GAME_SCRIPT)
 		local comp = entity and api.engine.getComponent(entity, CT.GAME_SCRIPT)
 		return comp and comp.state
 	end)
-	if not ok or type(s) ~= "table" or not s.follow or type(s.junctions) ~= "table" then return end
+	if not ok or type(s) ~= "table" or type(s.junctions) ~= "table" then return end
+	-- (`check`: a mark from priority road 44-46 saves, now repaired like the rest)
+	local function marked(j) return type(j) == "table" and (j.gone or j.repair or j.check) end
 	local todo = {}
 	for key, j in pairs(s.junctions) do
-		if type(j) == "table" and j.repair and not follow.handed[key] then
-			follow.handed[key] = true
-			todo[#todo + 1] = { node = tonumber(key), a = j.a, b = j.b, round = j.round, typeId = j.typeId, settings = j.settings }
+		local mode = marked(j) and (j.gone and "drop" or "repair")
+		if mode and follow.handed[key] ~= mode then
+			follow.handed[key] = mode
+			todo[#todo + 1] = { node = tonumber(key), a = j.a, b = j.b, round = j.round, typeId = j.typeId,
+				settings = j.settings, mode = mode }
 		end
 	end
 	for key in pairs(follow.handed) do
-		local j = s.junctions[key]
-		if not (type(j) == "table" and j.repair) then follow.handed[key] = nil end
+		if not marked(s.junctions[key]) then follow.handed[key] = nil end
 	end
 	if #todo > 0 then
+		follow.settle = FOLLOW_SETTLE
 		local rOk, err = pcall(repair, todo)
 		if not rOk then log("follow road edits: repair failed: %s", tostring(err)) end
 	end
@@ -1872,6 +2294,7 @@ if entryOk and mod_entry_point and mod_entry_point.ModEntryPointExtension then
 	FollowRoadEdits = react.RegisterPluginRecipe(mod_entry_point.ModEntryPointExtension, "ImsvaleFollowRoadEdits", function()
 		react.onStep(function()
 			follow.steps = follow.steps + 1
+			if follow.settle > 0 then follow.settle = follow.settle - 1 return end
 			if follow.steps < FOLLOW_EVERY then return end
 			follow.steps = 0
 			followRoadEdits()
@@ -1957,11 +2380,9 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				checkEnabledFn = inSection("general"),
 			},
 			{
-				group = FOLLOW_PARAM,
-				key = FOLLOW_PARAM,
-				name = "[Experimental] Follow road edits",
-				tooltip = "Experimental",
-				tooltips = { "Experimental: re-apply the yielding after the road or its lanes are edited" },
+				group = UNINSTALL_PARAM,
+				key = UNINSTALL_PARAM,
+				name = "Uninstall",
 				values = { "Yes" },
 				defaultIndex = 1,
 				resetOnCategoryChange = false,
@@ -1969,7 +2390,7 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				yearFrom = 0,
 				yearTo = 0,
 				location = api.type.enum.ScriptParamLocation.Default,
-				preserveValueInAllCategories = true,
+				preserveValueInAllCategories = false,
 				checkEnabledFn = inSection("general"),
 			},
 			{
