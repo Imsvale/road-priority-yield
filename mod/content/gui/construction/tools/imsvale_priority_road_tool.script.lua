@@ -13,8 +13,8 @@
 -- until it is back where it started: a loop. A loop that is round (every sample within
 -- ROUND_TOLERANCE of the average radius) is a roundabout, anything else a priority road; the
 -- yielding is the same, only the label (and later the signs) differ. Blue: the priority road;
--- gold: the approaches that yield. Click to apply to every junction on it; if they all have it
--- already, click removes it (light preference None, phases reset to the game's default).
+-- red: the approaches that yield (gold: a road about to lose it). Click to apply to every
+-- junction on it; if they all have it already, click removes it (light preference None, phases reset to the game's default).
 --
 -- Icons while the tool is open: a priority / yield icon on every approach of every junction
 -- configured with this mod, near the camera. Hovering a road previews its junctions instead:
@@ -49,10 +49,11 @@
 local react = ug_require "::/gui/main/react.lua"
 local builtin = ug_require "::/gui/main/builtin.lua"
 local color_util = ug_require "::/gui/main/color_util.tl"
+local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gui/construction/construction_colors.gres")).data
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 56 (placeholder search borrows a bounding box)"
+local VERSION = "priority road 59 (line colours as constants)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -62,6 +63,13 @@ local MAX_TURN = 45            -- degrees: how far the priority road may bend at
 local ROUND_TOLERANCE = 0.12   -- a loop is a roundabout if every sample is within 12 % of the mean radius
 local MAX_SEGMENTS = 400       -- stop following a road after this many segments
 local LIGHT_TYPE = "imsvale_yield_invisible" -- matched against the light type resource names
+-- The road lines drawn while hovering (user, 2026-10-21; compared with the game's road tool on
+-- screenshots): as wide as the game's highlight of a hovered road, half opaque.
+local LINE_WIDTH = 3.06         -- all three lines
+local LINE_ALPHA = 0.5          -- opacity of all three lines
+local LINE_PRIORITY = constructionColors.Modifier.Valid    -- the priority road: the game's blue
+local LINE_YIELD = { 170 / 255, 45 / 255, 40 / 255 }       -- the roads that yield: a dull red
+local LINE_REMOVE = constructionColors.Bulldozer           -- a road about to lose priority: the game's gold
 
 -- Icons, drawn on screen at each approach's junction edge (see IconOverlay): on every junction
 -- already configured with this mod, and the hovered road's preview.
@@ -1412,7 +1420,6 @@ local function segmentGeometry(seg)
 	return g
 end
 
-local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gui/construction/construction_colors.gres")).data
 local transparency = api.gui.genericRep.get(api.gui.genericRep.find("::/gui/main/transparency.gres")).data
 local selectionGres = api.gui.genericRep.get(api.gui.genericRep.find("::/gui/main/selection_colors.gres")).data
 
@@ -1979,15 +1986,13 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		local children = {}
 		if plan then
 			local edges = {}
-			-- The priority road (and the road about to lose it) as the game's road tool draws a
-			-- hovered road: width 3.06, half opaque (user, 2026-10-21; compared on screenshots).
-			local blue = color_util.withTransparency(constructionColors.Modifier.Valid, 0.5)
-			local gold = color_util.withTransparency(constructionColors.Bulldozer, 0.75)
-			local removing = color_util.withTransparency(constructionColors.Bulldozer, 0.5)
+			local blue = color_util.withTransparency(LINE_PRIORITY, LINE_ALPHA)
+			local red = color_util.withTransparency(LINE_YIELD, LINE_ALPHA)
+			local removing = color_util.withTransparency(LINE_REMOVE, LINE_ALPHA)
 			for _, s in ipairs(plan.remove and (plan.removeSegs or {}) or plan.segs) do
 				local e = builtin.type.EdgeRenderable.Edge.new(segmentGeometry(s))
 				e.colors = { plan.remove and removing or blue }
-				e.width = 3.06
+				e.width = LINE_WIDTH
 				e.offsetZ = 0.5
 				e.stepSize = 2
 				edges[#edges + 1] = e
@@ -1995,8 +2000,8 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			if not plan.remove then
 				for _, s in ipairs(plan.yieldSegs) do
 					local e = builtin.type.EdgeRenderable.Edge.new(segmentGeometry(s))
-					e.colors = { gold }
-					e.width = 1.0
+					e.colors = { red }
+					e.width = LINE_WIDTH
 					e.offsetZ = 0.5
 					e.stepSize = 2
 					edges[#edges + 1] = e
