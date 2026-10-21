@@ -1,7 +1,10 @@
-"""Writes the sign textures as uncompressed 32-bit DDS (BGRA) with a full mip chain.
+"""Writes the sign textures as DDS with a full mip chain, compressed to BC7.
 
-The base game reads uncompressed DDS too (e.g. climates/shared/skirt_color.dds), so no
-compression tool is needed; BC1/DXT1 can come later for size.
+The mip chain is written uncompressed (32-bit BGRA), then texconv (Microsoft's DirectXTex,
+TEXCONV) compresses it to BC7 in place, keeping the levels. Without texconv the textures stay
+uncompressed: the game reads those too, but its mod validation warns ("please use BC1/DXT1 for
+opaque textures"). BC1 is not an option: it stepped the diagonal edges and haloed the thin
+outlines, visibly in game; BC7 looked the same as uncompressed (user, 2026-10-22).
 
 Image rows are written top first, as an ordinary image: the top of the file is the top of the
 sign. (The exporter flips Blender's v, which has v = 0 at the bottom.)
@@ -21,11 +24,16 @@ screen (about 110 px at 4K), so 256 stays sharp with room to spare; mipmaps cove
 Run: .venv/Scripts/python tools/make_sign_textures.py   (needs Pillow and NumPy for the artwork;
 writes into mod/content/textures/models/imsvale_signs/)
 """
+import glob
 import os
 import struct
+import subprocess
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, "mod", "content", "textures", "models", "imsvale_signs")
+# texconv.exe from https://github.com/microsoft/DirectXTex/releases, kept in the shared
+# mods/tools (git-ignored there)
+TEXCONV = os.path.join(os.path.dirname(ROOT), "tools", "texconv.exe")
 
 SOURCE = r"D:\My Documents\Games\Transport Fever 3\Graphics\yield"
 FACE_SIZE = 256
@@ -229,3 +237,10 @@ if __name__ == "__main__":
             print("placeholder for", tex)
             write_dds(os.path.join(OUT, tex), *make())
     write_dds(os.path.join(OUT, "sign_metal.dds"), *solid(16, METAL))
+    if os.path.exists(TEXCONV):
+        # -bc x: BC7's slowest, best search; the levels written above are kept
+        subprocess.run([TEXCONV, "-nologo", "-f", "BC7_UNORM", "-bc", "x", "-y", "-o", OUT]
+                       + sorted(glob.glob(os.path.join(OUT, "*.dds"))), check=True, stdout=subprocess.DEVNULL)
+        print("compressed to BC7")
+    else:
+        print("no texconv at", TEXCONV, "- left uncompressed")
