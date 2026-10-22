@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 72 (a priority segment replaced next to a junction: repaired, not dropped)"
+local VERSION = "priority road 73 (priority signs that stand where they should are left alone)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1165,9 +1165,10 @@ local function storedDiamonds()
 	return ok and type(d) == "table" and d or {}
 end
 
-local function storeDiamonds(node, ids)
+-- sig: where the signs stand (see updateDiamonds), stored with them.
+local function storeDiamonds(node, ids, sig)
 	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME,
-		{ kind = "diamonds", node = node, ids = ids }))
+		{ kind = "diamonds", node = node, ids = ids, sig = sig }))
 end
 
 -- The priority road's segments in order from one end to the other, and the nodes between them
@@ -1330,13 +1331,38 @@ local function diamondPlaces(plan)
 	return places, pts, nodes, keys
 end
 
--- After the lights: the road's diamonds follow its yielding. The road's own diamonds (keys of
--- its nodes and segments) go; on applying, new ones are placed. Entries stored per node only
+-- After the lights: the road's diamonds follow its yielding. On removing, the removed stretch's
+-- diamonds go. On applying, the road's own diamonds (keys of its nodes and segments) are compared
+-- with where they should be: a key whose signs stand where they should (same `sig`: positions to
+-- 0.1 m and direction) is left alone, the rest removed and placed again (priority road 73, user:
+-- a junction joining a road shouldn't rebuild every sign on it). Entries stored per node only
 -- (priority road 25-26) are cleared for every node of the road.
 local function updateDiamonds(plan)
 	if plan.round then return end
 	local stored = storedDiamonds()
 	local places, pts, nodes, keys = diamondPlaces(plan)
+	-- Where each key's signs should stand.
+	local wanted = {}
+	for key, list in pairs(places) do
+		local transfs, parts = {}, {}
+		for _, place in ipairs(list) do
+			local t = diamondTransf(pts, place.s, place.dir)
+			local p = pointAt(pts, place.s)
+			if t and p then
+				transfs[#transfs + 1] = t
+				parts[#parts + 1] = string.format("%.1f,%.1f,%d", p.x, p.y, place.dir)
+			end
+		end
+		table.sort(parts)
+		wanted[key] = { transfs = transfs, sig = table.concat(parts, ";") }
+	end
+	local keep = {}
+	if not plan.remove then
+		for key, w in pairs(wanted) do
+			local old = stored[key]
+			if type(old) == "table" and #old > 0 and old.sig == w.sig then keep[key] = true end
+		end
+	end
 	local clear = {}
 	if plan.remove then
 		-- Only the removed stretch: its segments' keys, and per-node entries of its nodes.
@@ -1354,28 +1380,29 @@ local function updateDiamonds(plan)
 		for _, key in ipairs(keys) do clear[#clear + 1] = key end
 		for _, node in ipairs(nodes) do clear[#clear + 1] = tostring(node) end
 	end
+	local removed = 0
 	for _, key in ipairs(clear) do
 		local old = stored[key]
-		if type(old) == "table" and #old > 0 then
+		if not keep[key] and type(old) == "table" and #old > 0 then
 			removeSigns(old)
 			storeDiamonds(key, {})
 			stored[key] = nil
+			removed = removed + #old
 		end
 	end
 	if plan.remove then return end
-	local count = 0
-	for key, list in pairs(places) do
-		local transfs = {}
-		for _, place in ipairs(list) do
-			local t = diamondTransf(pts, place.s, place.dir)
-			if t then transfs[#transfs + 1] = t end
+	local count, kept = 0, 0
+	for key, w in pairs(wanted) do
+		if keep[key] then
+			kept = kept + #w.transfs
+		else
+			count = count + #w.transfs
+			placeAt(w.transfs, DIAMOND_FILE, "Priority sign", "diamonds at " .. key, function(ids)
+				storeDiamonds(key, ids, w.sig)
+			end)
 		end
-		count = count + #transfs
-		placeAt(transfs, DIAMOND_FILE, "Priority sign", "diamonds at " .. key, function(ids)
-			storeDiamonds(key, ids)
-		end)
 	end
-	log("priority signs: %d", count)
+	log("priority signs: %d placed, %d kept, %d removed", count, kept, removed)
 end
 
 -- Place every road's priority signs again with the current settings (the settings window's

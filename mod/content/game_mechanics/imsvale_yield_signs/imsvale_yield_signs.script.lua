@@ -22,8 +22,9 @@
 --
 -- State: {
 --   signs = { ["<node>"] = { ids = { asset ids }, style = "intl" | "no", round = bool } },
---   diamonds = { ["<node>"] = { asset ids } }: priority signs along a priority road, under the
---     junction they follow or the road end they start at (2026-10-19),
+--   diamonds = { ["<node>:<segment>"] = { asset ids, sig = where they stand } }: priority signs
+--     along a priority road, under the junction they follow or the road end they start at
+--     (2026-10-19; sig since priority road 73),
 --   junctions = { ["<node>"] = { a, b, round, typeId, fp, ph, handEdited, pending, settings,
 --     ahead = { a = { seg, node }, b = { seg, node } }, repair (always) | gone | check } },
 --   nextCheck = seconds, t = seconds, (follow = bool: the old switch, ignored since priority road 47)
@@ -475,6 +476,8 @@ local function handleEvent(_userParams, state, _src, id, name, param)
 		s.diamonds = s.diamonds or {}
 		local ids = {}
 		for _, e in ipairs(param.ids or {}) do ids[#ids + 1] = e end
+		-- sig: where the signs stand, so an update can leave unchanged ones alone (priority road 73)
+		if type(param.sig) == "string" then ids.sig = param.sig end
 		s.diamonds[tostring(param.node)] = #ids > 0 and ids or nil
 		log("priority signs at node %s: %d", tostring(param.node), #ids)
 	elseif kind == "junction" and param.node ~= nil then
