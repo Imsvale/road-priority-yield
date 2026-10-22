@@ -328,32 +328,43 @@ local function follow(s)
 				j.pending = nil
 			elseif fp ~= j.pending then
 				j.pending = fp -- changed: wait one more check for the edit to settle
-			elseif j.handEdited or (function()
-				-- A road edit (other roads in the connections: a road joined, removed or replaced,
-				-- by the player or a town growing, whose builds raise no build events) isn't a
-				-- phase edit: rebuilt below. Only with the same roads do changed phases mean the
-				-- player's (2026-10-22: towns joining streets read as hand edits before).
-				local oldRoads, newRoads = phases.fingerprintRoads(j.fp), phases.fingerprintRoads(fp)
-				local edited, why = false, "roads changed: " .. oldRoads .. " -> " .. newRoads
-				if oldRoads == newRoads then edited, why = phases.phasesEdited(j.ph, currentPhases(node)) end
-				if dev.traceFollow then
-					log("trace: node %d lanes changed (%s): %s", node, edited and "phases edited" or "rebuild", why)
-				end
-				return edited
-			end)() then
-				-- the player's own phases: theirs from now on (until applied again); lanes followed
-				-- only so this doesn't fire again
-				if not j.handEdited then log("follow lane edits: node %d phases edited by hand, left alone", node) end
-				j.handEdited = true
-				j.fp, j.pending, j.ph = fp, nil, nil
 			else
-				local failed = rebuild(node, j)
-				if failed then
-					log("follow lane edits: node %d handed over to drop (%s)", node, failed)
-					j.gone, j.why = true, failed
+				-- A road edit (other roads in the connections: a road joined, removed or replaced,
+				-- by the player or a town growing, whose builds raise no build events, 2026-10-22)
+				-- isn't a phase edit: the tool repairs the junction as after a road edit (phases,
+				-- lanes, yield signs for the new arm). Only with the same roads do changed phases
+				-- mean the player's (towns joining streets read as hand edits before).
+				local oldRoads, newRoads = phases.fingerprintRoads(j.fp), phases.fingerprintRoads(fp)
+				local verdict, why
+				if j.handEdited then
+					verdict, why = "left alone", "phases edited by hand before"
+				elseif oldRoads ~= newRoads then
+					verdict, why = "road edit", "roads " .. oldRoads .. " -> " .. newRoads
 				else
+					local edited
+					edited, why = phases.phasesEdited(j.ph, currentPhases(node))
+					verdict = edited and "phases edited" or "rebuild"
+				end
+				if dev.traceFollow then log("trace: node %d lanes changed (%s): %s", node, verdict, why) end
+				if verdict == "road edit" then
+					log("road edit at node %d (no build event; %s): marked repair", node, why)
+					j.repair = true
 					j.fp, j.pending = fp, nil
-					log("follow lane edits: node %d phases rebuilt for its new lanes", node)
+				elseif verdict ~= "rebuild" then
+					-- the player's own phases: theirs from now on (until applied again); lanes followed
+					-- only so this doesn't fire again
+					if not j.handEdited then log("follow lane edits: node %d phases edited by hand, left alone", node) end
+					j.handEdited = true
+					j.fp, j.pending, j.ph = fp, nil, nil
+				else
+					local failed = rebuild(node, j)
+					if failed then
+						log("follow lane edits: node %d handed over to drop (%s)", node, failed)
+						j.gone, j.why = true, failed
+					else
+						j.fp, j.pending = fp, nil
+						log("follow lane edits: node %d phases rebuilt for its new lanes", node)
+					end
 				end
 			end
 		end
