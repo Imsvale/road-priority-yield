@@ -148,6 +148,8 @@ Roadcraft: Priority roundabouts (another author's mod, notes in `docs/notes.md`)
 
 - The user tests in game and reads the game log (path in `../CLAUDE.md`). Log lines are tagged `[yield]`, and the tool logs `loaded: <VERSION>`: bump `VERSION` with every change.
 - **After editing a loaded script,** end the reply with a line naming the reload: GUI script Right Alt + Shift + R; new files a full restart; light type model scripts a savegame reload.
+- **Keep background work small** (user, 2026-10-22): players run many mods that compete for resources. Prefer reacting to events over watching for changes; weigh each polled check's cost against what it buys, and ask what the mod is for before adding one. Polling today: lane following every 3 s per junction (lane fingerprint, lights, `gone`), and since 71 a walk along each priority stretch (`watchAhead`, an open decision, `docs/release-checklist.md` item 3).
+- **Scope:** this repository only. Other sessions work in `..` (the mods folder: shared tooling, `RELEASING.md`) and the other projects; read there for reference, don't edit (user, 2026-10-22).
 - Refer to phases as #1..#n (1-based, as in the UI).
 - **Measuring something:** the lab has the recorder and paired-run tooling. Do experiments there.
 - Git: this folder is its own repository. On `dev`, commit every change once it's done, without asking (user, 2026-10-22); `main` only moves at a release (`../RELEASING.md`).

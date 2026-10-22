@@ -31,6 +31,14 @@ What to test or fix before the mod goes public, most important first. Tick items
 3. **Towns rebuilding their own roads.** Towns upgrade and extend streets as they grow.
    - Do the build events (`onPreBuildProposal` / `onPostBuildProposal`) fire for town upgrades, or only for the player's builds? If they don't, yielding quietly breaks in growing towns.
    - A town street built onto a priority road makes a junction nothing makes yield, like a player-built side road.
+
+   **Tested (2026-10-22, growing towns, priority road 68-73):**
+   - Towns raise no build events at all (dev switch `traceBuilds`): the road edits watcher only ever sees the player's builds. No road upgrades seen.
+   - Towns turn T junctions into 4-ways (21563, 2385, 10624, 6781): lane following sees the roads in the connections change and hands the junction to repair (70): phases and a yield sign for the new arm. Before 69 these read as hand edits.
+   - Towns join streets onto a priority stretch (4919, then 1598, 2725, 4124, 6515, 7253): found by polling along each priority stretch (`watchAhead`, 71) and made to yield.
+   - A priority segment replaced right next to one of our junctions is matched by direction and repaired, not dropped (72): **not yet seen in a test.**
+   - Repairs rebuild only the priority signs that moved (73): **check the log line "priority signs: N placed, M kept, K removed" after a town joins a street.**
+   - **Open decision (user):** keep 71 in the release, put it behind a setting (off by default), or leave extending priority roads to the player. The user wants the mod event-driven where it can be, not a monitor of everything (cost with many mods running).
 4. **A fresh start:** a new game with the mod, and adding the mod to an existing save that never had it. The game script subscribes to events once per save, and the junction registry and settings start from empty state. Most testing so far was on one long-lived save.
 5. **Removing yielding with a click.** With "Overwrite lanes" ticked, the rewritten lanes stay. A junction that had the player's own traffic light before applying gets the game's defaults back, not the player's light (restoring it is open work 2 in `CLAUDE.md`). At least know what happens, and mention it in the description if it stays. Since priority road 67 (checked in game, 2026-10-22) removal hands the junction back to the game: preference Auto, type -1, the game's own light where the roads call for one, none otherwise.
 6. **Junction shapes not tried yet:**
@@ -46,7 +54,9 @@ What to test or fix before the mod goes public, most important first. Tick items
 7. **Left-hand traffic.** Sign sides, roundabout arrows and the roundabout lane rules assume right-hand traffic. Decide: make it work, or have the tool refuse with "Right-hand traffic only".
 8. **Scale.** A long priority road (50+ junctions) and a save with a few hundred yielding junctions. Watch:
    - how slow applying and removing are;
-   - stutter, because the lane check (every 3 s) and the road edits watcher (every 30 frames) both read the whole stored state.
+   - stutter, because the lane check (every 3 s) and the road edits watcher (every 30 frames) both read the whole stored state;
+   - since priority road 71 the lane check also walks every priority stretch (`watchAhead`); if it shows, spread the junctions over several checks, or check segment ids first and walk only stretches with one gone (user's idea, 2026-10-22; a join at an existing plain node keeps every id, so not alone);
+   - a repair computes the whole road's priority sign layout (only the changed signs are rebuilt since 73); restricting it to the changed stretches would need a second placement path, not worth it unless long roads hitch.
 9. **Heavy traffic on the priority road.** With phase #2 at 1 s, do side roads still get out under sustained priority traffic?
 10. **Other traffic mods on the same save or junction:**
     - **Smart Lanes:** look at what it does. Does it conflict with ours, or can they coexist, the player using whichever mod they like to configure the lanes? Following lane edits would then rebuild our phases after Smart Lanes changes the lanes.
