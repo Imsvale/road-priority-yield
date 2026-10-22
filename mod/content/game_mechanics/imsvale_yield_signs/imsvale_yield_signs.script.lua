@@ -328,7 +328,19 @@ local function follow(s)
 				j.pending = nil
 			elseif fp ~= j.pending then
 				j.pending = fp -- changed: wait one more check for the edit to settle
-			elseif j.handEdited or phases.phasesEdited(j.ph, currentPhases(node)) then
+			elseif j.handEdited or (function()
+				-- A road edit (other roads in the connections: a road joined, removed or replaced,
+				-- by the player or a town growing, whose builds raise no build events) isn't a
+				-- phase edit: rebuilt below. Only with the same roads do changed phases mean the
+				-- player's (2026-10-22: towns joining streets read as hand edits before).
+				local oldRoads, newRoads = phases.fingerprintRoads(j.fp), phases.fingerprintRoads(fp)
+				local edited, why = false, "roads changed: " .. oldRoads .. " -> " .. newRoads
+				if oldRoads == newRoads then edited, why = phases.phasesEdited(j.ph, currentPhases(node)) end
+				if dev.traceFollow then
+					log("trace: node %d lanes changed (%s): %s", node, edited and "phases edited" or "rebuild", why)
+				end
+				return edited
+			end)() then
 				-- the player's own phases: theirs from now on (until applied again); lanes followed
 				-- only so this doesn't fire again
 				if not j.handEdited then log("follow lane edits: node %d phases edited by hand, left alone", node) end

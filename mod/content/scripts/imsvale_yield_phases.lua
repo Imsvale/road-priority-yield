@@ -97,18 +97,31 @@ end
 -- a lane edit keeps the phases of the connections that survive, makes new ones red in every phase
 -- (lab, 2026-10-19) and drops removed ones. So: other timings or phase count, a surviving
 -- connection green in other phases, or a new one green anywhere.
+-- Returns edited, and why (for the log).
 function M.phasesEdited(old, now)
-	if type(old) ~= "table" or type(old.green) ~= "table" then return false end
-	if old.timing ~= now.timing then return true end
+	if type(old) ~= "table" or type(old.green) ~= "table" then return false, "no phases recorded" end
+	if old.timing ~= now.timing then return true, "timings " .. tostring(old.timing) .. " -> " .. now.timing end
 	for key, g in pairs(now.green) do
 		local was = old.green[key]
 		if was == nil then
-			if g ~= "" then return true end
+			if g ~= "" then return true, "new " .. key .. " green in " .. g end
 		elseif was ~= g then
-			return true
+			return true, key .. " green in " .. (was == "" and "none" or was) .. " -> " .. (g == "" and "none" or g)
 		end
 	end
-	return false
+	return false, "only what the lane edit explains"
+end
+
+-- The roads (segment ids) a lane fingerprint's connections use, as a sorted string.
+function M.fingerprintRoads(fp)
+	local set, list = {}, {}
+	for a, b in tostring(fp or ""):gmatch("(%d+):%d+>(%d+):%d+") do
+		set[a], set[b] = true, true
+	end
+	for s in pairs(set) do list[#list + 1] = tonumber(s) end
+	table.sort(list)
+	for i, s in ipairs(list) do list[i] = tostring(s) end
+	return table.concat(list, " ")
 end
 
 return M
