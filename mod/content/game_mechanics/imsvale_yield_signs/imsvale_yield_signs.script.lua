@@ -25,6 +25,10 @@
 --   diamonds = { ["<node>"] = { asset ids } }: priority signs along a priority road, under the
 --     junction they follow or the road end they start at (2026-10-19),
 --   junctions = { ["<node>"] = { a, b, round, typeId, fp, ph, handEdited, pending, settings, repair (always) | gone | check } },
+--   newJunctions = { ["<node>"] = { split = old segment, toward = our junction } }: junctions that
+--     appeared on a priority road when a road was joined onto it (a segment split), not yielding;
+--     only recorded so far (priority road 68, 2026-10-22),
+--   splitting = { ... }: between a build's before and after events, the priority segments it removes,
 --   nextCheck = seconds, t = seconds, (follow = bool: the old switch, ignored since priority road 47)
 -- }
 -- (before 2026-10-18 evening a sign entry was the bare id list; the tool reads both).
@@ -70,6 +74,9 @@
 
 -- Loaded under pcall: if it fails, following is off but the signs still work.
 local phasesOk, phases = pcall(ug_require, "/scripts/imsvale_yield_phases.lua")
+-- Dev switches (all off in a release; on the dev branch, dev mode fills them in).
+local devOk, dev = pcall(ug_require, "/scripts/imsvale_yield_dev.lua")
+if not devOk or type(dev) ~= "table" then dev = {} end
 
 local EVENT_ID = "imsvale_road_priority_yield"
 local SIGNS_EVENT = "imsvale_yield_signs.set"
@@ -99,8 +106,28 @@ local function unit(x, y)
 	return { x = x / l, y = y / l }
 end
 
+-- From `node` out along `seg`, through plain nodes (two street segments), to the next junction
+-- or dead end: that node and the segment arriving at it.
+local function nextJunction(seg, node)
+	local cur, at = seg, node
+	for _ = 1, 400 do
+		local e = api.engine.getComponent(cur, CT.BASE_EDGE)
+		if not e then return nil end
+		local far = e.node0 == at and e.node1 or e.node0
+		local around = items(api.engine.system.streetSystem.getNodeStreetSegments(far))
+		if #around ~= 2 then return far, cur end
+		local nxt = around[1] == cur and around[2] or around[1]
+		if nxt == seg then return nil end -- a loop without junctions
+		cur, at = nxt, far
+	end
+	return nil
+end
+
 -- Before a build: the removed segments that end at a registered junction (priority or side road),
--- with their nodes and directions away from each end.
+-- with their nodes and directions away from each end. And the removed segments that are part of a
+-- priority road (the next junction along the road either way is ours and the road arrives there
+-- on a priority segment), to find new junctions on it afterwards (2026-10-22: towns join new
+-- streets onto existing ones by splitting a segment).
 local function beforeBuild(s, street)
 	local watched = {}
 	for key in pairs(s.junctions or {}) do
@@ -116,7 +143,64 @@ local function beforeBuild(s, street)
 				dir0 = unit(e.tangent0.x, e.tangent0.y), dir1 = unit(-e.tangent1.x, -e.tangent1.y),
 			}
 		end
+		if seg and e then
+			pcall(function()
+				for _, from in ipairs({ e.node0, e.node1 }) do
+					local j, arriving = nextJunction(seg, from)
+					local entry = j and s.junctions[tostring(j)]
+					if entry and not entry.gone and (arriving == entry.a or arriving == entry.b) then
+						local p0 = api.engine.getComponent(e.node0, CT.BASE_NODE).position
+						local p1 = api.engine.getComponent(e.node1, CT.BASE_NODE).position
+						s.splitting = s.splitting or {}
+						s.splitting[tostring(seg)] = { node0 = e.node0, node1 = e.node1, toward = j,
+							p0 = { x = p0.x, y = p0.y }, p1 = { x = p1.x, y = p1.y },
+							t0 = { x = e.tangent0.x, y = e.tangent0.y }, t1 = { x = e.tangent1.x, y = e.tangent1.y } }
+						return
+					end
+				end
+			end)
+		end
 	end
+end
+
+-- Distance from (x, y) to a segment's curve (cubic Hermite from its end positions and tangents).
+local function distanceToCurve(c, x, y)
+	local best = math.huge
+	for i = 0, 32 do
+		local s = i / 32
+		local s2, s3 = s * s, s * s * s
+		local h00, h10, h01, h11 = 2 * s3 - 3 * s2 + 1, s3 - 2 * s2 + s, -2 * s3 + 3 * s2, s3 - s2
+		local px = h00 * c.p0.x + h10 * c.t0.x + h01 * c.p1.x + h11 * c.t1.x
+		local py = h00 * c.p0.y + h10 * c.t0.y + h01 * c.p1.y + h11 * c.t1.y
+		best = math.min(best, math.sqrt((px - x) ^ 2 + (py - y) ^ 2))
+	end
+	return best
+end
+
+-- After a build: new junctions on a priority road, where a removed priority segment (`splitting`)
+-- was split by a road joining it. They don't yield: logged and recorded (`newJunctions`) for now.
+local function findNewJunctions(s, street)
+	if not s.splitting or next(s.splitting) == nil then return end
+	local nodes = {}
+	for _, x in ipairs(items(street.addedSegments)) do
+		local e = x.comp
+		if x.entity and x.entity >= 0 and e then nodes[e.node0] = true nodes[e.node1] = true end
+	end
+	for node in pairs(nodes) do
+		if not s.junctions[tostring(node)] and api.engine.entityExists(node)
+			and #items(api.engine.system.streetSystem.getNodeStreetSegments(node)) >= 3 then
+			local p = api.engine.getComponent(node, CT.BASE_NODE).position
+			for segKey, c in pairs(s.splitting) do
+				if node ~= c.node0 and node ~= c.node1 and distanceToCurve(c, p.x, p.y) < 2.0 then
+					s.newJunctions = s.newJunctions or {}
+					s.newJunctions[tostring(node)] = { split = tonumber(segKey), toward = c.toward }
+					log("new junction %d on the priority road (segment %s split), next to junction %d", node, segKey, c.toward)
+					break
+				end
+			end
+		end
+	end
+	s.splitting = nil
 end
 
 -- After it: replacements for the recorded segments; their junctions marked for repair.
@@ -307,11 +391,23 @@ end
 local function handleEvent(_userParams, state, _src, id, name, param)
 	if id == "apply_command" and (name == "onPreBuildProposal" or name == "onPostBuildProposal") then
 		local s = state:get() or {}
+		if dev.traceBuilds then
+			pcall(function()
+				local street = param[1] and param[1].proposal
+				log("build %s: %d segments added, %d removed", name == "onPreBuildProposal" and "before" or "after",
+					#items(street and street.addedSegments), #items(street and street.removedSegments))
+			end)
+		end
 		if not s.junctions or next(s.junctions) == nil then return end
 		local ok, err = pcall(function()
 			local street = param[1] and param[1].proposal
 			if not street then return end
-			if name == "onPreBuildProposal" then beforeBuild(s, street) else afterBuild(s, street) end
+			if name == "onPreBuildProposal" then
+				beforeBuild(s, street)
+			else
+				afterBuild(s, street)
+				findNewJunctions(s, street)
+			end
 		end)
 		if not ok then log("follow road edits: %s", tostring(err)) end
 		state:set(s)
