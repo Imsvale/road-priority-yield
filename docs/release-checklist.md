@@ -32,7 +32,7 @@ What to test or fix before the mod goes public, most important first. Tick items
    - Do the build events (`onPreBuildProposal` / `onPostBuildProposal`) fire for town upgrades, or only for the player's builds? If they don't, yielding quietly breaks in growing towns.
    - A town street built onto a priority road makes a junction nothing makes yield, like a player-built side road.
 4. **A fresh start:** a new game with the mod, and adding the mod to an existing save that never had it. The game script subscribes to events once per save, and the junction registry and settings start from empty state. Most testing so far was on one long-lived save.
-5. **Removing yielding with a click.** With "Overwrite lanes" ticked, the rewritten lanes stay. A junction that had the player's own traffic light before applying gets the game's defaults back, not the player's light (restoring it is open work 2 in `CLAUDE.md`). At least know what happens, and mention it in the description if it stays.
+5. **Removing yielding with a click.** With "Overwrite lanes" ticked, the rewritten lanes stay. A junction that had the player's own traffic light before applying gets the game's defaults back, not the player's light (restoring it is open work 2 in `CLAUDE.md`). At least know what happens, and mention it in the description if it stays. Since priority road 67 (checked in game, 2026-10-22) removal hands the junction back to the game: preference Auto, type -1, the game's own light where the roads call for one, none otherwise.
 6. **Junction shapes not tried yet:**
    - one-way roads, as the priority road and as a side road;
    - the priority road turning at a junction;
