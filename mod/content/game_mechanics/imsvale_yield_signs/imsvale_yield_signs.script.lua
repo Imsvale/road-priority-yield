@@ -236,11 +236,46 @@ local function afterBuild(s, street)
 end
 
 -- Why a registered junction can't be followed any more, or nil.
+-- A priority segment that's gone but has a successor leaving the junction the same way (a road
+-- joined it right next to the junction, which splits it into new segments, or an upgrade, with no
+-- build event, as by a town) isn't a reason: the junction is marked `repair` with the new segment
+-- instead (2026-10-22). For that, the direction each priority segment leaves the junction is
+-- remembered (`dirs`) while it's there.
 local function gone(node, j)
 	if not api.engine.entityExists(node) then return "node gone" end
 	local segs = {}
 	for _, seg in ipairs(api.engine.system.streetSystem.getNodeStreetSegments(node)) do segs[seg] = true end
-	if not segs[j.a] or not segs[j.b] then return "priority road rebuilt" end
+	j.dirs = type(j.dirs) == "table" and j.dirs or {}
+	local replaced = {}
+	for _, field in ipairs({ "a", "b" }) do
+		local seg, d = j[field], j.dirs[field]
+		if segs[seg] then
+			if not d or d.seg ~= seg then
+				local u = leavingDir(seg, node)
+				j.dirs[field] = { seg = seg, x = u.x, y = u.y }
+			end
+		else
+			local other = j[field == "a" and "b" or "a"]
+			local best, bestDot = nil, 0.9
+			for cand in pairs(segs) do
+				if d and cand ~= other then
+					local u = leavingDir(cand, node)
+					local dot = u.x * d.x + u.y * d.y
+					if dot > bestDot then best, bestDot = cand, dot end
+				end
+			end
+			if not best then return "priority road rebuilt" end
+			replaced[field] = best
+		end
+	end
+	if next(replaced) then
+		for field, new in pairs(replaced) do
+			log("road edit at node %d (no build event): priority segment %d replaced by %d: marked repair", node, j[field], new)
+			j[field] = new
+		end
+		j.repair, j.pending = true, nil
+		return nil
+	end
 	local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
 	if not cfg or not api.engine.getComponent(node, CT.BASE_NODE_TRAFFIC_LIGHT) then return "light removed" end
 	if j.typeId ~= nil and cfg.trafficLightConfig.trafficLightType ~= j.typeId then return "light type changed" end
