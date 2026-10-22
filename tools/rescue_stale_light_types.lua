@@ -10,9 +10,10 @@
 -- node, e.g. on a road upgrade there (2026-10-20). Removing the light doesn't help: the index
 -- stays (Traffic Light Tools' Remove all sets the preference to NO and leaves the type as is).
 --
--- What it does, per stale node: the light's phases are emptied, the type set to the game's type A
--- and the preference to NO (no light), sent as a traffic light proposal, the same change the
--- Priority Road tool's Uninstall makes. Lanes are left as they are.
+-- What it does, per stale node: the light's phases are emptied, the type set to -1 (the game's default)
+-- and, where a light is on, the preference to AUTO (the game decides whether it gets a light;
+-- where it's off, the player's preference stays), sent as a traffic light proposal, the same
+-- change the Priority Road tool's Uninstall makes. Lanes are left as they are.
 --
 -- Use:
 --   1. Paste as is (FIX = false): it only lists the stale nodes.
@@ -40,26 +41,11 @@ if not ok then print("[rescue] reading the light types failed: " .. tostring(err
 print("[rescue] light types: " .. count)
 for id, name in pairs(names) do print("[rescue]   " .. id .. ": " .. name) end
 
--- The Type A for the save's climate (traffic_light_a: temperate, subarctic; traffic_light_dry_a:
--- dry, tropical), else any Type A, else index 0, as the tool's Uninstall picks it.
-local base, anyA = nil, nil
-local climate = ""
-pcall(function() climate = tostring(api.res.getBaseConfig().climate) end)
-for id, name in pairs(names) do
-	local file = name:match("([^/\\]+)$") or ""
-	if file:match("^traffic_light[%w_]*_a%.trl") then
-		local fits = false
-		pcall(function()
-			for _, cat in ipairs(rep.get(id).categoryList.categories) do
-				if cat == "all.clima" or climate:find(cat, 1, true) then fits = true end
-			end
-		end)
-		if fits and (base == nil or id < base) then base = id end
-		if anyA == nil or id < anyA then anyA = id end
-	end
-end
-base = base or anyA or 0
-print("[rescue] replacement type: " .. tostring(base) .. " (" .. tostring(base and names[base]) .. ")")
+-- The replacement: -1, the game's "no type chosen" (its own managed lights and junctions without
+-- a light have it), as the tool gives every light it takes off since priority road 65. -1 isn't
+-- in the type list, but it isn't stale either.
+local base = -1
+print("[rescue] replacement type: -1 (the game's default)")
 
 -- The stale nodes.
 local stale = {}
@@ -67,7 +53,7 @@ ok, err = pcall(function()
 	for node in pairs(api.engine.system.streetSystem.getNode2SegmentMap()) do
 		local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
 		local t = cfg and cfg.trafficLightConfig.trafficLightType
-		if t ~= nil and not valid[t] then
+		if t ~= nil and t ~= -1 and not valid[t] then
 			local lit = api.engine.getComponent(node, CT.BASE_NODE_TRAFFIC_LIGHT) ~= nil
 			stale[#stale + 1] = { node = node, cfg = cfg, type = t, lit = lit }
 		end
@@ -81,7 +67,7 @@ for _, x in ipairs(stale) do
 end
 
 -- The fix.
-if FIX and base ~= nil then
+if FIX then
 	local sent = 0
 	for _, x in ipairs(stale) do
 		if LIMIT and sent >= LIMIT then break end
@@ -89,8 +75,9 @@ if FIX and base ~= nil then
 			local tl = x.cfg.trafficLightConfig:clone()
 			tl.states = {}
 			tl.trafficLightType = base
+			-- AUTO where a light is on; where it's off, the player's choice stays
 			local proposal = api.engine.util.proposal.createTrafficLightProposal(x.node, tl,
-				api.type.enum.TrafficLightPreference.NO)
+				x.lit and api.type.enum.TrafficLightPreference.AUTO or x.cfg.trafficLightPreference)
 			api.cmd.sendCommand(api.cmd.makeWorldBuildProposalCmd(proposal, nil, false, true), function(_, success)
 				local now = api.engine.getComponent(x.node, CT.BASE_NODE_CONFIG)
 				print(string.format("[rescue] node %d: %s, type now %s", x.node, success and "fixed" or "REJECTED",
@@ -100,6 +87,4 @@ if FIX and base ~= nil then
 		if sOk then sent = sent + 1 else print("[rescue] node " .. x.node .. ": " .. tostring(sErr)) end
 	end
 	print("[rescue] sent: " .. sent .. " of " .. #stale)
-elseif FIX then
-	print("[rescue] no valid light type to use; nothing changed")
 end

@@ -69,4 +69,46 @@ function M.fingerprint(cfg)
 	return table.concat(parts, " ")
 end
 
+-- The phases as written, to tell the player's phase edits from what a lane edit alone does
+-- (2026-10-22). BASE_NODE_CONFIG.userModifiedTrafficLightStates can't: our own proposals set it
+-- too. { timing = "duration/min/skip;...", green = { [connection or "x<crosswalk>"] = "12" } }:
+-- for each lane connection (by what it connects, not its position) and crosswalk (by its entity:
+-- the crosswalks' order changed over a save reload, 2026-10-22), the phases it's green in. From the
+-- given connections, crosswalks and states, so a rebuild can store what it sends before the engine
+-- has applied it.
+function M.phaseFingerprint(conns, crosswalks, states)
+	local timing, green = {}, {}
+	local keys = {}
+	for i, c in ipairs(conns) do keys[i - 1] = c.segment0 .. ":" .. c.lane0 .. ">" .. c.segment1 .. ":" .. c.lane1 end
+	for i, x in ipairs(crosswalks) do keys[#conns + i - 1] = "x" .. tostring(x) end
+	for _, key in pairs(keys) do green[key] = "" end
+	for p, st in ipairs(states) do
+		timing[#timing + 1] = string.format("%g/%g/%s", st.duration, st.minDuration, tostring(st.canSkip))
+		local locked = {}
+		for _, l in ipairs(st.lockedLanes) do locked[l] = true end
+		for idx, key in pairs(keys) do
+			if not locked[idx] then green[key] = green[key] .. p end
+		end
+	end
+	return { timing = table.concat(timing, ";"), green = green }
+end
+
+-- Whether the phases now differ from `old` (a phaseFingerprint) by more than a lane edit makes:
+-- a lane edit keeps the phases of the connections that survive, makes new ones red in every phase
+-- (lab, 2026-10-19) and drops removed ones. So: other timings or phase count, a surviving
+-- connection green in other phases, or a new one green anywhere.
+function M.phasesEdited(old, now)
+	if type(old) ~= "table" or type(old.green) ~= "table" then return false end
+	if old.timing ~= now.timing then return true end
+	for key, g in pairs(now.green) do
+		local was = old.green[key]
+		if was == nil then
+			if g ~= "" then return true end
+		elseif was ~= g then
+			return true
+		end
+	end
+	return false
+end
+
 return M

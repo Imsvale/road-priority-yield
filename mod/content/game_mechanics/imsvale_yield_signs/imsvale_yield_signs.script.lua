@@ -10,14 +10,21 @@
 -- connections. Every CHECK_EVERY seconds the junctions' lanes are
 -- compared with the fingerprint; a change that stays the same over two checks in a row (the edit
 -- has settled) rebuilds the phases from the new lanes with the same plan (phases module), lanes
--- untouched. Phase edits alone don't trigger it. A junction drops out when its node or priority
--- segments are gone, its light was removed or switched to another type, or no side road leads in.
+-- untouched. Phase edits alone don't trigger it. Unless the player also edited the phases (they
+-- differ from the ones written, `ph`, by more than the lane edit explains): then the junction is
+-- marked handEdited and its phases are left alone from then on, until it's applied again
+-- (2026-10-22). A junction drops out when its node or priority segments are gone, its light was
+-- removed or switched to another type (by the player, or by the game taking the light over), or
+-- no side road leads in: it's marked `gone` (with `why`) and the tool drops it as after a road
+-- edit, its signs included (until 2026-10-22 only the entry was deleted and the signs stayed).
+-- Checks run on the wall clock where the sandbox has one (os.time), so edits made while the game
+-- is paused are followed too; otherwise on game time.
 --
 -- State: {
 --   signs = { ["<node>"] = { ids = { asset ids }, style = "intl" | "no", round = bool } },
 --   diamonds = { ["<node>"] = { asset ids } }: priority signs along a priority road, under the
 --     junction they follow or the road end they start at (2026-10-19),
---   junctions = { ["<node>"] = { a, b, round, typeId, fp, pending, settings, repair (always) | gone | check } },
+--   junctions = { ["<node>"] = { a, b, round, typeId, fp, ph, handEdited, pending, settings, repair (always) | gone | check } },
 --   nextCheck = seconds, t = seconds, (follow = bool: the old switch, ignored since priority road 47)
 -- }
 -- (before 2026-10-18 evening a sign entry was the bare id list; the tool reads both).
@@ -205,7 +212,14 @@ local function rebuild(node, j)
 	tl.states = states
 	local proposal = api.engine.util.proposal.createTrafficLightProposal(node, tl, api.type.enum.TrafficLightPreference.YES)
 	api.cmd.sendCommand(api.cmd.makeWorldBuildProposalCmd(proposal, nil, false, true))
+	j.ph = phases.phaseFingerprint(cfg.laneConnections, cfg.crosswalks, states)
 	return nil
+end
+
+-- The junction's phases as they are now (phases.phaseFingerprint).
+local function currentPhases(node)
+	local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
+	return phases.phaseFingerprint(cfg.laneConnections, cfg.crosswalks, cfg.trafficLightConfig.states)
 end
 
 local function follow(s)
@@ -215,9 +229,13 @@ local function follow(s)
 		if node then why = gone(node, j) end
 		local marked = j.repair or j.gone or j.check
 		if marked then why = false end -- the tool handles it (and removes its signs)
-		if why then
-			log("follow lane edits: node %s dropped (%s)", key, why)
+		if why and not node then
+			log("follow lane edits: entry %s dropped (%s)", key, why)
 			s.junctions[key] = nil
+		elseif why then
+			-- the tool drops it: our signs removed, our light (if it still is) off, unregistered
+			log("follow lane edits: node %s handed over to drop (%s)", key, why)
+			j.gone, j.why = true, why
 		elseif marked then
 			-- the tool repairs, drops or checks it
 		else
@@ -226,11 +244,17 @@ local function follow(s)
 				j.pending = nil
 			elseif fp ~= j.pending then
 				j.pending = fp -- changed: wait one more check for the edit to settle
+			elseif j.handEdited or phases.phasesEdited(j.ph, currentPhases(node)) then
+				-- the player's own phases: theirs from now on (until applied again); lanes followed
+				-- only so this doesn't fire again
+				if not j.handEdited then log("follow lane edits: node %d phases edited by hand, left alone", node) end
+				j.handEdited = true
+				j.fp, j.pending, j.ph = fp, nil, nil
 			else
 				local failed = rebuild(node, j)
 				if failed then
-					log("follow lane edits: node %d dropped (%s)", node, failed)
-					s.junctions[key] = nil
+					log("follow lane edits: node %d handed over to drop (%s)", node, failed)
+					j.gone, j.why = true, failed
 				else
 					j.fp, j.pending = fp, nil
 					log("follow lane edits: node %d phases rebuilt for its new lanes", node)
@@ -251,19 +275,29 @@ local function update(_userParams, state, dt)
 		s.buildSubscribed = true
 		state:set(s)
 	end
-	if dt <= 0 then return end
+	local wall = nil
+	pcall(function() wall = os.time() end)
+	if dt <= 0 and not wall then return end
 	if not phasesOk then
 		if s.lastError ~= "module" then log("follow lane edits: phases module failed to load: %s", tostring(phases)) end
 		s.lastError = "module"
 		state:set(s)
 		return
 	end
-	s.t = (s.t or 0) + dt
-	if s.t < (s.nextCheck or 0) then
-		state:set(s)
+	local clock = wall and "wall" or "game"
+	if s.clock ~= clock then
+		s.clock = clock
+		log("follow lane edits: checks on the %s clock", clock)
+	end
+	s.t = (s.t or 0) + math.max(dt, 0)
+	local now = wall or s.t
+	-- far ahead: a wall clock time read back on game time (or the clock changed)
+	if (s.nextCheck or 0) > now + 10 * CHECK_EVERY then s.nextCheck = nil end
+	if now < (s.nextCheck or 0) then
+		if dt > 0 then state:set(s) end
 		return
 	end
-	s.nextCheck = s.t + CHECK_EVERY
+	s.nextCheck = now + CHECK_EVERY
 	local ok, err = pcall(follow, s)
 	if not ok and tostring(err) ~= s.lastError then log("follow lane edits failed: %s", tostring(err)) end
 	s.lastError = not ok and tostring(err) or nil
@@ -306,7 +340,8 @@ local function handleEvent(_userParams, state, _src, id, name, param)
 			s.junctions[key] = nil
 		else
 			s.junctions[key] = { a = param.a, b = param.b, round = param.round or false, typeId = param.typeId, fp = param.fp,
-				settings = type(param.settings) == "table" and param.settings or nil }
+				settings = type(param.settings) == "table" and param.settings or nil,
+				ph = type(param.ph) == "table" and param.ph or nil }
 		end
 	elseif kind == "reset" then
 		s.signs, s.diamonds, s.junctions, s.replaced = nil, nil, nil, nil

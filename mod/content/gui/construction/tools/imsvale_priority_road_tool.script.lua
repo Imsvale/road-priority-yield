@@ -14,7 +14,8 @@
 -- ROUND_TOLERANCE of the average radius) is a roundabout, anything else a priority road; the
 -- yielding is the same, only the label (and later the signs) differ. Blue: the priority road;
 -- red: the approaches that yield (gold: a road about to lose it). Click to apply to every
--- junction on it; if they all have it already, click removes it (light preference None, phases reset to the game's default).
+-- junction on it; if they all have it already, click removes it (light preference Auto, type -1:
+-- the junction is the game's again, its own light where the roads call for one).
 --
 -- Icons while the tool is open: a priority / yield icon on every approach of every junction
 -- configured with this mod, near the camera. Hovering a road previews its junctions instead:
@@ -39,7 +40,7 @@
 -- of the road it turns into; "Dedicated turn lanes" on top of it makes turning lanes turn-only
 -- where another lane still goes straight on. Roundabouts: their own rule (roundaboutLanes: the
 -- ring steps toward the exits). Lanes and phases are then set together in one node config
--- proposal, so every connection has a green. Removing the yielding leaves the lanes as they are. Measured in the lab (../Smart traffic lights,
+-- proposal, so every connection has a green. Removing the yielding leaves the lanes as they are. Measured in the lab (../traffic-lab,
 -- docs/studies/2026-10-18_give-way-junctions.md, runs 15-25): never worse than the game's lanes,
 -- up to 19% fewer forced entries on wide roads.
 --
@@ -53,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 59 (line colours as constants)"
+local VERSION = "priority road 67 (lights we take off: preference Auto, the junction back to the game)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -90,7 +91,6 @@ local CONFIGURED_REFRESH = 3.0 -- seconds between scans for configured junctions
 local ICONS = {
 	priority = "imsvale_road_priority_yield::/gui/priority-diamond.tga",
 	yield = "imsvale_road_priority_yield::/gui/yield.tga",
-	remove = "imsvale_road_priority_yield::/gui/remove-x.tga", -- drawn over an icon that goes away ("x" style)
 }
 -- Icons per sign style, where a style has its own (made from the user's artwork by
 -- tools/make_gui_icons.py); anything missing falls back to ICONS (international).
@@ -104,9 +104,8 @@ end
 -- the overlay, so a change shows at once (it was only passed in when the action was rebuilt,
 -- which a setting change doesn't do; 2026-10-19). GUI module state.
 local iconStyle = "intl"
--- How an icon that goes away is marked: "highlight" = the bulldozer's look (a box of translucent
--- gold with a stronger gold outline, in the game's own Bulldozer colour), "x" = ICONS.remove on top.
-local REMOVAL_STYLE = "highlight"
+-- An icon that goes away is marked with the bulldozer's look: a box of translucent gold with a
+-- stronger gold outline, in the game's own Bulldozer colour.
 local HIGHLIGHT_FILL = 0.35    -- opacity of the highlight's fill
 local HIGHLIGHT_BORDER = 0.9   -- opacity of its outline
 local HIGHLIGHT_WIDTH = 2      -- outline width, pixels
@@ -233,6 +232,24 @@ local function walk(seg, node, stopAt, visited)
 	return segs, nodes, false
 end
 
+-- From `node` out along `seg`, through plain nodes (two segments), to the first junction or dead
+-- end. Returns that node and the segments on the way (the last one ends at it).
+local function stretchFrom(seg, node)
+	local path, cur = { seg }, seg
+	local _, far = leaving(seg, node)
+	for _ = 1, MAX_SEGMENTS do
+		local around = {}
+		for _, s in ipairs(api.engine.system.streetSystem.getNodeStreetSegments(far)) do around[#around + 1] = s end
+		if #around ~= 2 then break end
+		local nxt = around[1] == cur and around[2] or around[1]
+		if nxt == seg then break end -- a loop without junctions
+		path[#path + 1] = nxt
+		local _, f = leaving(nxt, far)
+		cur, far = nxt, f
+	end
+	return far, path
+end
+
 local function hermite(p0, p1, t0, t1, s)
 	local s2, s3 = s * s, s * s * s
 	local h00, h10, h01, h11 = 2 * s3 - 3 * s2 + 1, s3 - 2 * s2 + s, -2 * s3 + 3 * s2, s3 - s2
@@ -284,39 +301,24 @@ local function invisibleType()
 	return nil
 end
 
--- The game's own Type A, for every light we take off: a node keeps its light type as an index
--- into the type list even without a light, and without this mod our index points past the end,
--- which crashed the game when the road tool rebuilt such a node (2026-10-20).
--- The base game has four types (base/content/infrastructure/traffic_light.zip): traffic_light_a /
--- _c for temperate and subarctic, traffic_light_dry_a / _dry_c for dry and tropical, indices 0-3
--- in every save whatever its climate (the junction window shows only the climate's). So: the
--- Type A for the save's climate, else any Type A, else index 0 (user, 2026-10-21).
-local baseTypeId = nil
-local function baseLightType()
-	if baseTypeId then return baseTypeId end
-	local ours = invisibleType()
-	local rep = api.res.trafficLightTypeRep
-	local climate = ""
-	pcall(function() climate = tostring(api.res.getBaseConfig().climate) end)
-	local anyA = nil
-	pcall(function()
-		for id, name in pairs(rep.getAll(true)) do
-			local file = tostring(name):match("([^/\\]+)$") or ""
-			if id ~= ours and file:match("^traffic_light[%w_]*_a%.trl") then
-				local fits = false
-				pcall(function()
-					for _, cat in ipairs(rep.get(id).categoryList.categories) do
-						if cat == "all.clima" or climate:find(cat, 1, true) then fits = true end
-					end
-				end)
-				if fits and (baseTypeId == nil or id < baseTypeId) then baseTypeId = id end
-				if anyA == nil or id < anyA then anyA = id end
-			end
-		end
-	end)
-	baseTypeId = baseTypeId or anyA or 0
-	log("lights we take off get type %d (climate %s)", baseTypeId, climate)
-	return baseTypeId
+-- The type every light we take off gets: -1, the game's "no type chosen" (its own managed lights
+-- and junctions without a light have it; a light added there later is the climate's default).
+-- A node keeps its light type index even without a light, and without this mod our index points
+-- past the end of the list, which crashed the game when the road tool rebuilt such a node
+-- (2026-10-20). -1 doesn't: Uninstall, mod disabled, road upgraded at a former junction, the
+-- game's usual lights there (user's test, 2026-10-22). Priority road 48-64 used the climate's
+-- Type A instead, found by name and climate category.
+local TAKEN_OFF_TYPE = -1
+-- And its preference: AUTO, as at a junction the game manages itself, so taking ours off resets
+-- the junction with no further assumptions: the game puts its own light there where the roads
+-- call for one (user, 2026-10-22; until priority road 66 it was NO, never a light).
+local TAKEN_OFF_PREFERENCE = api.type.enum.TrafficLightPreference.AUTO
+-- The preference to leave at a node we take our type off where the light may be gone already:
+-- AUTO while our light is still on; where the player switched it off (no light, our type still
+-- stored), theirs, or the game would put a light back that they removed.
+local function takenOffPreference(node, cfg)
+	if api.engine.getComponent(node, CT.BASE_NODE_TRAFFIC_LIGHT) then return TAKEN_OFF_PREFERENCE end
+	return cfg.trafficLightPreference
 end
 
 local junctionStates = phases.junctionStates -- (node, a, b, cfg, round, conns)
@@ -749,8 +751,8 @@ local function apply(plan, done, lanes, onJob)
 			if j.removeHere then
 				local tl = cfg.trafficLightConfig:clone()
 				tl.states = {}
-				tl.trafficLightType = baseLightType()
-				jobs[#jobs + 1] = { node = j.node, tl = tl, pref = api.type.enum.TrafficLightPreference.NO, remove = true }
+				tl.trafficLightType = TAKEN_OFF_TYPE
+				jobs[#jobs + 1] = { node = j.node, tl = tl, pref = TAKEN_OFF_PREFERENCE, remove = true }
 			end
 		elseif j.states then
 			local tl = cfg.trafficLightConfig:clone()
@@ -898,7 +900,8 @@ local function registerJunction(job, settings)
 	else
 		local cfg = api.engine.getComponent(job.node, CT.BASE_NODE_CONFIG)
 		param = { node = job.node, a = job.a, b = job.b, round = job.round, typeId = job.typeId,
-			fp = phases.fingerprint(cfg), settings = settings }
+			fp = phases.fingerprint(cfg), settings = settings,
+			ph = phases.phaseFingerprint(cfg.laneConnections, cfg.crosswalks, cfg.trafficLightConfig.states) }
 	end
 	param.kind = "junction"
 	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, param))
@@ -1477,7 +1480,7 @@ end
 --   Icons further from the camera's centre than the range (which grows with the camera's
 --   height) are hidden, and fade out before that, so close in the horizon stays clear.
 -- - An icon that goes away gets a second element at the same place, drawn on top: the
---   bulldozer-style highlight box, or ICONS.remove (REMOVAL_STYLE).
+--   bulldozer-style highlight box.
 -- - Re-projected every step, so the icons follow the camera.
 -- param: planIcons (the hovered road's preview), planNodes (its junctions, whose configured
 -- icons the preview replaces). The sign style comes from iconStyle.
@@ -1577,13 +1580,7 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	end
 	for i, p in ipairs(placed) do
 		image(i, "", p, iconFor(p.kind, iconStyle))
-		if p.cross then
-			if REMOVAL_STYLE == "x" then
-				image(i, "x", p, ICONS.remove)
-			else
-				highlight(i, p)
-			end
-		end
+		if p.cross then highlight(i, p) end
 	end
 	-- Uninstall's window: its presence is mounted inside this overlay, because an action may have
 	-- only one FullScreenComponent ("Must not specify more than 1 FullScreenComponent", a crash,
@@ -1650,14 +1647,14 @@ end
 
 local function removeAll()
 	local nodes = uninstallCounts()
-	local base, refused = baseLightType(), 0
+	local base, refused = TAKEN_OFF_TYPE, 0
 	for _, node in ipairs(nodes) do
 		local ok, err = pcall(function()
 			local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
 			local tl = cfg.trafficLightConfig:clone()
 			tl.states = {}
 			tl.trafficLightType = base
-			send(node, tl, api.type.enum.TrafficLightPreference.NO, function(success)
+			send(node, tl, takenOffPreference(node, cfg), function(success)
 				if not success then
 					refused = refused + 1
 					log("uninstall: node %d refused", node)
@@ -2087,14 +2084,19 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	params.setActionFn(actionFn, "imsvale_priority_road_" .. tostring(revision:old()))
 end)
 
--- A junction that can't yield any more (bulldozed, or no side road left): our light goes (if the
--- node is still there with our light type), its yield signs go, and it's unregistered.
--- roadEnds: a priority segment is gone, so the priority road ends here; the priority signs after
--- this junction (keys "<node>:<segment>") go too (user, 2026-10-20: a priority road ending at a T
--- whose through road yields isn't a thing). And for each remaining priority segment (`segs`): if
--- the road it belongs to has no yielding junction left, all its priority signs go, the start sign
--- at its far end included (priority road 46). Without roadEnds (no side road left, the road goes
--- on through a plain node) they stay.
+-- A junction that can't yield any more (bulldozed, no side road left, its light type changed or
+-- its light removed): our light goes (if the node is still there with our light type), its yield
+-- signs go, and it's unregistered.
+-- roadEnds (every drop handed over by the game script, priority road 64): its priority signs are
+-- sorted out too:
+-- - the signs leading toward it go (the ones at the far end of each stretch from it, priority road 64);
+-- - the signs after it (keys "<node>:<segment>"): all of them if the node or a priority segment is
+--   gone (user, 2026-10-20: a priority road ending at a T whose through road yields isn't a
+--   thing); otherwise those whose next junction ahead doesn't yield;
+-- - for each remaining priority segment (`segs`): if the road it belongs to has no yielding
+--   junction left, all its priority signs go, the start sign at its far end included (priority
+--   road 46).
+-- Without roadEnds (a repair finding no side road left) they stay.
 -- Road edits: the watcher's state (FollowRoadEdits below; repair checks `handed`).
 local FOLLOW_EVERY = 30
 -- After a hand-over, wait this many steps before the next: a repair's commands and sign
@@ -2122,14 +2124,51 @@ local function drop(node, why, typeId, roadEnds, segs)
 		storeSigns(node, {})
 	end
 	if roadEnds then
-		local prefix = tostring(node) .. ":"
-		for key, ids in pairs(storedDiamonds()) do
-			if tostring(key):sub(1, #prefix) == prefix and type(ids) == "table" then
+		local registered = registeredJunctions()
+		-- still yielding: registered and not about to be dropped itself
+		local function yielding(n)
+			local j = registered[tostring(n)]
+			return type(j) == "table" and not j.gone
+		end
+		local diamonds = storedDiamonds()
+		local function clear(key)
+			local ids = diamonds[key]
+			if type(ids) == "table" then
 				removeSigns(ids)
 				storeDiamonds(key, {})
+				diamonds[key] = nil
 			end
 		end
-		local registered = registeredJunctions()
+		local exists = node and api.engine.entityExists(node)
+		local armGone = false
+		for _, seg in ipairs(segs or {}) do
+			if not isEdge(seg) then armGone = true end
+		end
+		if exists then
+			-- A priority sign says: priority at the next junction ahead. So the signs leading toward
+			-- this junction go: each hangs on the junction (or road end) at the far end of the
+			-- stretch, keyed with the stretch's last segment (user, 2026-10-22). With the junction
+			-- and both arms still there (its light type changed, say), its own signs, leading away,
+			-- stay where the next junction ahead still yields.
+			for _, seg in ipairs(segs or {}) do
+				if isEdge(seg) then
+					local ok, err = pcall(function()
+						local far, path = stretchFrom(seg, node)
+						clear(far .. ":" .. path[#path])
+						if not armGone and not yielding(far) then clear(node .. ":" .. seg) end
+					end)
+					if not ok then log("follow road edits: priority signs toward node %d: %s", node, tostring(err)) end
+				end
+			end
+		end
+		if not exists or armGone then
+			-- the junction, or the priority road through it, is gone: everything that hung on it
+			-- (a priority road ending at a T whose through road yields isn't a thing: user, 2026-10-20)
+			local prefix = tostring(node) .. ":"
+			for key in pairs(diamonds) do
+				if tostring(key):sub(1, #prefix) == prefix then clear(key) end
+			end
+		end
 		for _, seg in ipairs(segs or {}) do
 			if isEdge(seg) then
 				local ok, err = pcall(function()
@@ -2150,14 +2189,13 @@ local function drop(node, why, typeId, roadEnds, segs)
 					end
 					for n in pairs(nodes) do
 						-- this junction is being unregistered: it doesn't count
-						if n ~= node and registered[tostring(n)] then return end
+						if n ~= node and yielding(n) then return end
 					end
 					local count = 0
-					for key, ids in pairs(storedDiamonds()) do
+					for key in pairs(diamonds) do -- (clearing an entry while traversing is allowed)
 						local s = tonumber(tostring(key):match(":(%d+)$") or "")
-						if s and chain[s] and type(ids) == "table" then
-							removeSigns(ids)
-							storeDiamonds(key, {})
+						if s and chain[s] then
+							clear(key)
 							count = count + 1
 						end
 					end
@@ -2173,8 +2211,8 @@ local function drop(node, why, typeId, roadEnds, segs)
 			if cfg and typeId and cfg.trafficLightConfig.trafficLightType == typeId then
 				local tl = cfg.trafficLightConfig:clone()
 				tl.states = {}
-				tl.trafficLightType = baseLightType()
-				send(node, tl, api.type.enum.TrafficLightPreference.NO, function(success)
+				tl.trafficLightType = TAKEN_OFF_TYPE
+				send(node, tl, takenOffPreference(node, cfg), function(success)
 					if not success then log("follow road edits: node %d: light removal refused", node) end
 				end)
 			end
@@ -2209,7 +2247,9 @@ local function repair(todo)
 	for _, item in ipairs(todo) do
 		local node, settings = item.node, type(item.settings) == "table" and item.settings or {}
 		if item.mode == "drop" then
-			drop(node, "its road was removed", typeId, true, { item.a, item.b })
+			-- why: set when lane following found it can't keep the junction (light type changed or
+			-- removed, no side road left); otherwise a road edit removed its road
+			drop(node, item.why or "its road was removed", typeId, true, { item.a, item.b })
 		elseif node and api.engine.entityExists(node) and isEdge(item.a) and isEdge(item.b) then
 			local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
 			local states, why, sideSegs = junctionStates(node, item.a, item.b, cfg, item.round)
@@ -2280,7 +2320,7 @@ local function followRoadEdits()
 		if mode and follow.handed[key] ~= mode then
 			follow.handed[key] = mode
 			todo[#todo + 1] = { node = tonumber(key), a = j.a, b = j.b, round = j.round, typeId = j.typeId,
-				settings = j.settings, mode = mode }
+				settings = j.settings, mode = mode, why = j.why }
 		end
 	end
 	for key in pairs(follow.handed) do

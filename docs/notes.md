@@ -1,6 +1,6 @@
 # Yield
 
-Split off from the Smart traffic lights lab (`../Smart traffic lights`) on 2026-10-16. The lab stays the place for experiments; this mod is what came out of the yielding one.
+Split off from the Traffic Lab (`../traffic-lab`) on 2026-10-16. The lab stays the place for experiments; this mod is what came out of the yielding one.
 
 ## Why a light
 
@@ -21,7 +21,7 @@ Results (paired runs, details in the lab's `docs/studies/2026-10-15_traffic-mana
     - Crosswalks are green in both phases (user, 2026-10-20). Until priority road 44 they had a phase #3 of their own; the lab's studies ran with pedestrians green throughout.
   - **Priority isn't geometry** (user, 2026-10-20): a main road can turn at a near-90° corner where a side road joins, and priority goes on with the main road. So when a priority arm is bulldozed, the junction is dropped (priority signs after it removed) rather than guessing a new priority pair from the shape. The player clicks the road again.
   - **Junctions with no side road leading in** (exits only) get no light.
-  - **Click** applies. If every junction already has it, click removes it (preference None, phases reset to the game's default; earlier custom lights are not restored).
+  - **Click** applies. If every junction already has it, click removes it (preference Auto and type -1 since priority road 67: the junction is the game's again; earlier custom lights are not restored).
   - **Not handled:** the engine's precedence flags. Auto can give a town-road spoke (610) right of way over a native roundabout's one-way ring (410/430), so the road you click is always the priority road.
 
 - `content/infrastructure/traffic_light/imsvale_yield_invisible.trl.lua` ("Yield (invisible)"): type A's standard light layout with every model shrunk to 1/1000. A type that places no models at all makes the engine drop the light, as if the type were None.
@@ -101,7 +101,7 @@ How the Priority Road tool places signs, what the user saw in game, and what is 
 
 ## Ordinary junctions (T and 4-way), from the lab (2026-10-19)
 
-Studied in the lab (`../Smart traffic lights/docs/studies/2026-10-18_give-way-junctions.md`) with paired runs on two-lane roads, measuring forced entries (a car entering while one it should give way to is close) and needless waits.
+Studied in the lab (`../traffic-lab/docs/studies/2026-10-18_give-way-junctions.md`) with paired runs on two-lane roads, measuring forced entries (a car entering while one it should give way to is close) and needless waits.
 
 - **Phase #2 without the exits** ("side" in the study) is the best plan found:
   - At a 4-way the exits (the priority road's turns into the side roads) cross or merge with the side roads' traffic. Leaving them red in #2 cut forced side road entries from 33 to 25 in 15 minutes, at 28% more side road waiting and no cost to the priority road.
@@ -127,7 +127,7 @@ Two opt-in tool settings, both default No:
 
 Every lane still reaches every road it reached before, so routes stay valid. Lanes and phases are set together in one node config proposal.
 
-**Why**, from the lab's paired runs (`../Smart traffic lights/docs/studies/2026-10-18_give-way-junctions.md`, runs 15–25), forced entries:
+**Why**, from the lab's paired runs (`../traffic-lab/docs/studies/2026-10-18_give-way-junctions.md`, runs 15–25), forced entries:
 
 | Junction | Game lanes | Overwrite | Dedicated |
 |---|---|---|---|
