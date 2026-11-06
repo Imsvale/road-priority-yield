@@ -39,7 +39,7 @@ What to test or fix before the mod goes public, most important first. Tick items
    - A priority segment replaced right next to one of our junctions is matched by direction and repaired, not dropped (72): **not yet seen in a test.**
    - Repairs rebuild only the priority signs that moved (73): **check the log line "priority signs: N placed, M kept, K removed" after a town joins a street.**
    - **Open decision (user):** keep 71 in the release, put it behind a setting (off by default), or leave extending priority roads to the player. The user wants the mod event-driven where it can be, not a monitor of everything (cost with many mods running).
-4. **A fresh start:** a new game with the mod, and adding the mod to an existing save that never had it. The game script subscribes to events once per save, and the junction registry and settings start from empty state. Most testing so far was on one long-lived save.
+4. **Done (priority road 73, 2026-11-06): adding the mod to an existing save that never had it** (Nordstavic, a large save with three towns). The game created the game script's entity on load ("Creating entity for newly added GameScript"), lane following started (wall clock), and roads of 6 and 26 junctions applied without a failure; no errors from the mod. A new game with the mod wasn't tried separately: the same path, an empty state.
 5. **Removing yielding with a click.** With "Overwrite lanes" ticked, the rewritten lanes stay. A junction that had the player's own traffic light before applying gets the game's defaults back, not the player's light (restoring it is open work 2 in `CLAUDE.md`). At least know what happens, and mention it in the description if it stays. Since priority road 67 (checked in game, 2026-10-22) removal hands the junction back to the game: preference Auto, type -1, the game's own light where the roads call for one, none otherwise.
 6. **Junction shapes not tried yet:**
    - one-way roads, as the priority road and as a side road;
@@ -51,8 +51,8 @@ What to test or fix before the mod goes public, most important first. Tick items
    - junctions very close together.
 
    Also asymmetric roads and noise barriers (sign placement, `notes.md`).
-7. **Left-hand traffic.** Sign sides, roundabout arrows and the roundabout lane rules assume right-hand traffic. Decide: make it work, or have the tool refuse with "Right-hand traffic only".
-8. **Scale.** A long priority road (50+ junctions) and a save with a few hundred yielding junctions. Watch:
+7. **Left-hand traffic: not supported, untested** (user, 2026-11-06). Sign sides, roundabout arrows and the roundabout lane rules assume right-hand traffic; it may or may not work. The base game has no left-hand traffic, so it only matters with a mod that adds it; the user may test with one. The tool doesn't refuse. Say so in the README / description.
+8. **Scale.** A long priority road (50+ junctions) and a save with a few hundred yielding junctions. So far (2026-11-06, Nordstavic): one road of 94 segments and 26 junctions applied in about 1-2 s with its 38 priority signs; 32 yielding junctions in a large save (estimated 21 GB), no trouble reported. Watch:
    - how slow applying and removing are;
    - stutter, because the lane check (every 3 s) and the road edits watcher (every 30 frames) both read the whole stored state;
    - since priority road 71 the lane check also walks every priority stretch (`watchAhead`); if it shows, spread the junctions over several checks, or check segment ids first and walk only stretches with one gone (user's idea, 2026-10-22; a join at an existing plain node keeps every id, so not alone);
