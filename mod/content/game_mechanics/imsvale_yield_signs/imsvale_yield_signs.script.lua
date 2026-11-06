@@ -350,8 +350,11 @@ local function follow(s)
 		elseif marked then
 			-- the tool repairs, drops or checks it
 		else
-			local aOk, aErr = pcall(watchAhead, s, node, j, adopt)
-			if not aOk then log("watching ahead of node %d: %s", node, tostring(aErr)) end
+			-- dev builds only for now (dev switch watchAhead, off in a release: user, 2026-11-07)
+			if dev.watchAhead then
+				local aOk, aErr = pcall(watchAhead, s, node, j, adopt)
+				if not aOk then log("watching ahead of node %d: %s", node, tostring(aErr)) end
+			end
 			local fp = phases.fingerprint(api.engine.getComponent(node, CT.BASE_NODE_CONFIG))
 			if fp == j.fp then
 				j.pending = nil
