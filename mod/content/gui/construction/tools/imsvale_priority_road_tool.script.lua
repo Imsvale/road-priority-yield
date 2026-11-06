@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 74 (watching priority stretches for new junctions: dev builds only)"
+local VERSION = "priority road 75 (signs on the side the roads say traffic keeps to; none before 1950)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -847,6 +847,7 @@ local SIGN_BACK = 0.5          -- metres back from the junction edge along the a
 local CLEAR_RAISED = 0.5       -- metres past the curb onto a raised sidewalk
 local CLEAR_LEVEL = 1.0        -- metres past the curb where there is no raised sidewalk (a level
                                -- pedestrian strip, a shoulder's edge, or nothing)
+local SIGN_YEAR = 1950         -- no signs before this game year (signsAllowed; user, 2026-11-07)
 local SIGN_GAME_SCRIPT = "imsvale_road_priority_yield::/game_mechanics/imsvale_yield_signs/imsvale_yield_signs.gs"
 local SIGN_EVENT_ID = "imsvale_road_priority_yield"
 local SIGN_EVENT_NAME = "imsvale_yield_signs.set"
@@ -947,21 +948,79 @@ local function curb(laneConfigs)
 	return outer, raised, width
 end
 
+-- Which side traffic keeps to at `node`, read from its roads: true for left, false for right, nil
+-- if no approach shows it. Lane numbers in its lane connections run left to right as seen from the
+-- node looking out along each segment; with right-hand traffic the lanes coming in are the lower
+-- numbers there, the lanes going out the higher, and a left-hand traffic mod mirrors that (the
+-- Left Hand Traffic mod swaps every two-way street's lane directions: user's test, 2026-11-07).
+-- One-way approaches show nothing; the two-way ones vote.
+local function keepsLeft(node)
+	local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
+	if not cfg then return nil end
+	local inMax, outMin, inMin, outMax = {}, {}, {}, {}
+	for _, c in ipairs(cfg.laneConnections) do
+		local a, b = c.segment0, c.segment1
+		inMax[a] = math.max(inMax[a] or -1, c.lane0)
+		inMin[a] = math.min(inMin[a] or 1e9, c.lane0)
+		outMin[b] = math.min(outMin[b] or 1e9, c.lane1)
+		outMax[b] = math.max(outMax[b] or -1, c.lane1)
+	end
+	local left, right = 0, 0
+	for seg, hi in pairs(inMax) do
+		if outMin[seg] then
+			if hi < outMin[seg] then right = right + 1
+			elseif inMin[seg] > outMax[seg] then left = left + 1 end
+		end
+	end
+	if left == right then return nil end
+	return left > right
+end
+
+-- The side for a whole road: its junctions vote (right if none can tell).
+local function roadKeepsLeft(plan)
+	local left, right = 0, 0
+	for _, j in ipairs(plan.junctions or {}) do
+		local ok, side = pcall(keepsLeft, j.node)
+		if ok and side == true then left = left + 1 elseif ok and side == false then right = right + 1 end
+	end
+	return left > right
+end
+
+-- The game year now (as the game's construction menu reads it).
+local function currentYear()
+	local year = nil
+	pcall(function()
+		local t = api.engine.getComponent(api.engine.util.getWorld(), CT.GAME_TIME)
+		year = api.engine.util.getCalendarDate(t.gameTime).year
+	end)
+	return year
+end
+
+-- Signs only from SIGN_YEAR: earlier, modern road signs look out of place (user, 2026-11-07, a
+-- game started in 1900). The yielding itself works in any year. These shapes were standardised
+-- internationally after the Second World War (1949 Geneva protocol on road signs) and common by
+-- the 1950s (general knowledge, not checked against a source).
+local function signsAllowed()
+	local year = currentYear()
+	return year == nil or year >= SIGN_YEAR
+end
+
 -- Where a sign stands for traffic coming in on `seg` towards `node`: SIGN_BACK back from the
 -- junction edge (the approach's lanes end there, so bigger junctions push it out by themselves),
--- on the right of that traffic (right-hand traffic) just past the curb, facing the traffic (the
--- model's face is its -Y).
-local function signTransf(seg, node)
+-- on the side that traffic keeps to (right, or left where the roads say so: keepsLeft) just past
+-- the curb, facing the traffic (the model's face is its -Y).
+local function signTransf(seg, node, left)
 	local edge, d = junctionEdge(seg, node)
 	if not edge then return nil end
 	local e = api.engine.getComponent(seg, CT.BASE_EDGE)
 	local outer, raised, width = curb(e.laneConfigs)
 	local lateral = outer + (raised and CLEAR_RAISED or CLEAR_LEVEL)
-	log("sign on segment %d at node %d: road %.1f m, curb %.1f m from the centre, raised sidewalk %s -> %.1f m",
-		seg, node, width, outer, tostring(raised), lateral)
-	local right = { x = -d.y, y = d.x }
-	local x = edge.x + d.x * SIGN_BACK + right.x * lateral
-	local y = edge.y + d.y * SIGN_BACK + right.y * lateral
+	log("sign on segment %d at node %d: road %.1f m, curb %.1f m from the centre, raised sidewalk %s -> %.1f m%s",
+		seg, node, width, outer, tostring(raised), lateral, left and ", left-hand traffic" or "")
+	-- the traffic's right (it heads -d, towards the node), or its left
+	local side = left and { x = d.y, y = -d.x } or { x = -d.y, y = d.x }
+	local x = edge.x + d.x * SIGN_BACK + side.x * lateral
+	local y = edge.y + d.y * SIGN_BACK + side.y * lateral
 	local angle = (math.atan2 or math.atan)(d.x, -d.y)
 	return api.type.Mat4f.rotZTransl(angle, api.type.Vec3f.new(x, y, edge.z))
 end
@@ -1003,8 +1062,10 @@ end
 -- Build signs for the given approaches of one junction; done(asset ids).
 local function placeSigns(node, segs, file, done)
 	local transfs = {}
+	local okSide, left = pcall(keepsLeft, node)
+	left = okSide and left == true
 	for _, seg in ipairs(segs) do
-		local t = signTransf(seg, node)
+		local t = signTransf(seg, node, left)
 		if t then transfs[#transfs + 1] = t end
 	end
 	placeAt(transfs, file, "Yield sign", "node " .. node, done)
@@ -1030,6 +1091,8 @@ end
 -- re-placing) the stored ones go; yielding approaches get new ones.
 local function updateSigns(plan, style)
 	local stored = storedSigns()
+	local allowed = plan.remove or signsAllowed()
+	if not allowed then log("signs: none before %d", SIGN_YEAR) end
 	for _, j in ipairs(plan.junctions) do
 		local key = tostring(j.node)
 		local old = stored[key]
@@ -1038,7 +1101,7 @@ local function updateSigns(plan, style)
 				removeSigns(old.ids)
 				storeSigns(j.node, {})
 			end
-		elseif j.states then
+		elseif j.states and allowed then
 			if old then removeSigns(old.ids) end
 			local segs = {}
 			for seg, role in pairs(j.new or {}) do
@@ -1238,13 +1301,15 @@ local function pointAt(pts, s)
 end
 
 -- A sign at s for traffic heading dir (+1: increasing s, -1: decreasing): on that traffic's
--- right just past the curb, facing it (the model's face is its -Y).
-local function diamondTransf(pts, s, dir)
+-- right just past the curb (its left with `left`: left-hand traffic), facing it (the model's face
+-- is its -Y).
+local function diamondTransf(pts, s, dir, left)
 	local p, t, seg = pointAt(pts, s)
 	if not p then return nil end
 	local h = { x = t.x * dir, y = t.y * dir }
 	local outer, raised = curb(api.engine.getComponent(seg, CT.BASE_EDGE).laneConfigs)
 	local lateral = outer + (raised and CLEAR_RAISED or CLEAR_LEVEL)
+	if left then lateral = -lateral end
 	local x, y = p.x + h.y * lateral, p.y - h.x * lateral
 	local angle = (math.atan2 or math.atan)(-h.x, h.y)
 	return api.type.Mat4f.rotZTransl(angle, api.type.Vec3f.new(x, y, p.z))
@@ -1341,16 +1406,19 @@ local function updateDiamonds(plan)
 	if plan.round then return end
 	local stored = storedDiamonds()
 	local places, pts, nodes, keys = diamondPlaces(plan)
+	-- No signs before SIGN_YEAR: none wanted, so any left over go and none are placed.
+	if not plan.remove and not signsAllowed() then places = {} end
+	local left = roadKeepsLeft(plan)
 	-- Where each key's signs should stand.
 	local wanted = {}
 	for key, list in pairs(places) do
 		local transfs, parts = {}, {}
 		for _, place in ipairs(list) do
-			local t = diamondTransf(pts, place.s, place.dir)
+			local t = diamondTransf(pts, place.s, place.dir, left)
 			local p = pointAt(pts, place.s)
 			if t and p then
 				transfs[#transfs + 1] = t
-				parts[#parts + 1] = string.format("%.1f,%.1f,%d", p.x, p.y, place.dir)
+				parts[#parts + 1] = string.format("%.1f,%.1f,%d%s", p.x, p.y, place.dir, left and "L" or "")
 			end
 		end
 		table.sort(parts)
@@ -2249,6 +2317,26 @@ local function drop(node, why, typeId, roadEnds, segs)
 	registerJunction({ node = node, remove = true })
 end
 
+-- Priority signs for the given roads ({ seg, diamonds = the sign settings it was applied with }),
+-- each road once.
+local function redoRoadDiamonds(roads)
+	local done = {}
+	for _, r in ipairs(roads) do
+		if not done[r.seg] and isEdge(r.seg) then
+			local ok, plan = pcall(planFrom, r.seg)
+			if ok and plan and not plan.round then
+				for _, x in ipairs(plan.segs) do done[x] = true end
+				plan.remove = false
+				local saved = panelDiamonds
+				if type(r.diamonds) == "table" then panelDiamonds = r.diamonds end
+				local dOk, err = pcall(updateDiamonds, plan)
+				panelDiamonds = saved
+				if not dOk then log("follow road edits: priority signs: %s", tostring(err)) end
+			end
+		end
+	end
+end
+
 -- After a road edit, for the junctions the game script marked (see FollowRoadEdits below).
 -- todo: { { node, a, b, round, typeId, settings, mode }, ... }; a / b are already the new segments.
 -- - mode "drop": bulldozed (node gone, or a priority segment removed without a replacement).
@@ -2306,22 +2394,38 @@ local function repair(todo)
 			drop(node, "its node or priority road is gone", typeId, true, { item.a, item.b })
 		end
 	end
-	-- Priority signs: each affected road once, with the settings it was applied with.
-	local done = {}
-	for _, r in ipairs(roads) do
-		if not done[r.seg] and isEdge(r.seg) then
-			local ok, plan = pcall(planFrom, r.seg)
-			if ok and plan and not plan.round then
-				for _, x in ipairs(plan.segs) do done[x] = true end
-				plan.remove = false
-				local saved = panelDiamonds
-				if type(r.diamonds) == "table" then panelDiamonds = r.diamonds end
-				local dOk, err = pcall(updateDiamonds, plan)
-				panelDiamonds = saved
-				if not dOk then log("follow road edits: priority signs: %s", tostring(err)) end
+	redoRoadDiamonds(roads)
+end
+
+-- Signs held back before SIGN_YEAR (signsAllowed) are placed once the year comes: every registered
+-- junction without stored yield signs gets them, and the roads through them their priority signs.
+-- FollowRoadEdits calls this until signs are allowed; then it runs once and not again this session.
+local signCatchUp = { done = false } -- GUI module state
+local function catchUpSigns()
+	if signCatchUp.done or not signsAllowed() then return end
+	signCatchUp.done = true
+	local stored, roads, count = storedSigns(), {}, 0
+	for key, j in pairs(registeredJunctions()) do
+		local node = tonumber(key)
+		if node and type(j) == "table" and not j.gone and not j.repair and not stored[key]
+			and api.engine.entityExists(node) then
+			local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
+			local segs = {}
+			for seg, role in pairs(configuredRoles(cfg)) do
+				if role == "yield" then segs[#segs + 1] = seg end
 			end
+			local settings = type(j.settings) == "table" and j.settings or {}
+			local style, round = settings.style or SIGN_STYLES[1], j.round or false
+			placeSigns(node, segs, signFile(style, round), function(ids)
+				storeSigns(node, ids, style, round)
+			end)
+			count = count + 1
+			if not round then roads[#roads + 1] = { seg = j.a, diamonds = settings.diamonds } end
 		end
 	end
+	if count == 0 then return end
+	log("signs from %d: placing them at %d junctions", SIGN_YEAR, count)
+	redoRoadDiamonds(roads)
 end
 
 -- Mounted for the whole session through the game's ModEntryPointExtension (plugin resource
@@ -2370,6 +2474,10 @@ if entryOk and mod_entry_point and mod_entry_point.ModEntryPointExtension then
 			if follow.steps < FOLLOW_EVERY then return end
 			follow.steps = 0
 			followRoadEdits()
+			if not signCatchUp.done then
+				local ok, err = pcall(catchUpSigns)
+				if not ok then log("signs from %d: %s", SIGN_YEAR, tostring(err)) end
+			end
 		end)
 		return nil
 	end)
