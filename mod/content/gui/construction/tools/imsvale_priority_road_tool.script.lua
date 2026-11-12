@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 78 (lane rules traced on dev: traceLanes)"
+local VERSION = "priority road 79 (roundabout lanes mirrored for left-hand traffic)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -518,8 +518,13 @@ end
 -- Applying
 ---------------------------------------------------------------------------
 
--- Lane rules, ported from the lab's tools/set_lanes.lua. Right-hand traffic; lane numbers as
--- seen from the node: inbound 1 = curb, outbound the highest number = curb.
+local keepsLeft -- (node): the side traffic keeps to, read from the roads; defined with the signs
+
+-- Lane rules, ported from the lab's tools/set_lanes.lua. Lane numbers as seen from the node:
+-- inbound, the lowest number is the traffic's rightmost lane; outbound, the highest. With
+-- right-hand traffic that's the curb lane, with left-hand traffic the median lane. The rule works
+-- on the traffic's left and right, not on curb and median, so it holds for either side of the road
+-- (checked with the Left Hand Traffic mod, 2026-11-12): "curb" below is right-hand traffic's.
 -- - Which inbound lanes make which turn stays as it is (the game's or the player's choice).
 -- - Per approach and road turned into: a right turn maps its inbound lanes, curb first, onto the
 --   road's outbound lanes, curb first, one to one; a left turn the same from the median side.
@@ -627,7 +632,11 @@ end
 -- - A one-lane ring: its lane exits and goes on. No exit at this junction: lane to lane.
 -- Returns the new connections, or nil when the junction isn't one ring in, one ring out, one side
 -- road.
-local function roundaboutLanes(node, cfg, a, b, exitStyle)
+-- Left-hand traffic (`left`, keepsLeft): the curb, the outside of the ring, is then the traffic's
+-- left, so every lane list is counted from the other side, and the whole rule comes out mirrored:
+-- the left lane exits, lanes going on step left, the rightmost entry lanes get the extra ring
+-- lanes (2026-11-12: before, left-hand traffic exited from the inner lane).
+local function roundaboutLanes(node, cfg, a, b, exitStyle, left)
 	local old = cfg.laneConnections -- copies
 	local ringIn, ringOut
 	for _, c in ipairs(old) do
@@ -643,8 +652,8 @@ local function roundaboutLanes(node, cfg, a, b, exitStyle)
 		end
 	end
 	if not spoke then return nil end
-	-- Lanes as the connections use them; inbound curb first (1 = curb), outbound curb first
-	-- (the highest number = curb).
+	-- Lanes as the connections use them, curb first: with right-hand traffic inbound from the
+	-- lowest number, outbound from the highest; with left-hand traffic the other way round.
 	local sets = { ringIn = {}, ringOut = {}, spokeOut = {}, entry = {} }
 	local template = old[1]
 	for _, c in ipairs(old) do
@@ -656,7 +665,9 @@ local function roundaboutLanes(node, cfg, a, b, exitStyle)
 	local function sorted(set, inbound)
 		local l = {}
 		for lane in pairs(set) do l[#l + 1] = lane end
-		table.sort(l, inbound and function(x, y) return x < y end or function(x, y) return x > y end)
+		local ascending = inbound
+		if left then ascending = not ascending end
+		table.sort(l, ascending and function(x, y) return x < y end or function(x, y) return x > y end)
 		return l
 	end
 	local ringInL, ringOutL = sorted(sets.ringIn, true), sorted(sets.ringOut, false)
@@ -775,7 +786,8 @@ local function apply(plan, done, lanes, onJob)
 				if planHere.lanes == "junction" then
 					conns = rewriteLanes(j.node, cfg, lanes.dedicated)
 				elseif planHere.lanes == "roundabout" then
-					conns = roundaboutLanes(j.node, cfg, j.a, j.b, lanes.exitStyle)
+					local okSide, left = pcall(keepsLeft, j.node)
+					conns = roundaboutLanes(j.node, cfg, j.a, j.b, lanes.exitStyle, okSide and left == true)
 					if not conns then log("node %d: roundabout lanes left as they are", j.node) end
 				end
 			end
@@ -970,7 +982,7 @@ end
 -- numbers there, the lanes going out the higher, and a left-hand traffic mod mirrors that (the
 -- Left Hand Traffic mod swaps every two-way street's lane directions: user's test, 2026-11-07).
 -- One-way approaches show nothing; the two-way ones vote.
-local function keepsLeft(node)
+function keepsLeft(node) -- assigns the local declared before the lane rules
 	local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
 	if not cfg then return nil end
 	local inMax, outMin, inMin, outMax = {}, {}, {}, {}
