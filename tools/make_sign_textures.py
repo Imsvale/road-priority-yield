@@ -244,7 +244,7 @@ if __name__ == "__main__":
             faces[tex] = make()
         write_dds(os.path.join(OUT, tex), *faces[tex])
     # Left-hand traffic: the roundabout sign mirrored, its arrows going clockwise (the user's
-    # assets/roundabout-lht.tga is the same mirror at icon size, 2026-11-12). The other faces are
+    # gui/roundabout-lht.tga is the same mirror at icon size, 2026-11-12). The other faces are
     # symmetrical.
     n, px = faces["roundabout_face.dds"]
     write_dds(os.path.join(OUT, "roundabout_lht_face.dds"), n, mirror(n, px))

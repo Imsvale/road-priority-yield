@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 76 (roundabout sign mirrored for left-hand traffic)"
+local VERSION = "priority road 77 (roundabout icon in the centre of roundabouts)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -91,6 +91,9 @@ local CONFIGURED_REFRESH = 3.0 -- seconds between scans for configured junctions
 local ICONS = {
 	priority = "imsvale_road_priority_yield::/gui/priority-diamond.tga",
 	yield = "imsvale_road_priority_yield::/gui/yield.tga",
+	-- in a roundabout's centre (ringIcon), its arrows clockwise for left-hand traffic
+	roundabout = "imsvale_road_priority_yield::/gui/roundabout.tga",
+	roundabout_lht = "imsvale_road_priority_yield::/gui/roundabout-lht.tga",
 }
 -- Icons per sign style, where a style has its own (made from the user's artwork by
 -- tools/make_gui_icons.py); anything missing falls back to ICONS (international).
@@ -1533,6 +1536,53 @@ local lastLog = nil -- plans are worked out on every redraw: log one only when i
 -- node map.
 local configured = { time = nil, version = 0, junctions = {} }
 
+-- Roundabouts, for the icon in their centre (user, 2026-11-12). ringOf(seg): the ring a priority
+-- segment belongs to, { x, y, z (its centre), segs }, or false; worked out once per ring (the loop
+-- walked, roundness checked) and kept under all its segments. Cleared on an apply / remove; a
+-- replaced segment has a new id and is simply looked up again. GUI module state.
+local ringCache = {}
+
+local function ringCentre(segs)
+	local sx, sy, sz, n = 0, 0, 0, 0
+	for _, seg in ipairs(segs) do
+		local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+		for i = 0, 3 do
+			local p = hermite(e.position0, e.position1, e.tangent0, e.tangent1, i / 4)
+			sx, sy, n = sx + p.x, sy + p.y, n + 1
+		end
+		sz = sz + (e.position0.z + e.position1.z) / 2
+	end
+	return { x = sx / n, y = sy / n, z = sz / #segs }
+end
+
+local function ringOf(seg)
+	local cached = ringCache[seg]
+	if cached ~= nil then return cached end
+	local ring = false
+	local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+	if e then
+		local more, _, loop = walk(seg, e.node1, seg, { [seg] = true })
+		if loop then
+			local segs = { seg }
+			for _, x in ipairs(more) do segs[#segs + 1] = x end
+			if roundness(segs) then
+				ring = ringCentre(segs)
+				ring.segs = segs
+				for _, x in ipairs(segs) do ringCache[x] = ring end
+			end
+		end
+	end
+	ringCache[seg] = ring
+	return ring
+end
+
+-- The centre icon for a ring whose junction `node` keeps to the left or right (keepsLeft).
+local function ringIcon(ring, node, cross)
+	local ok, left = pcall(keepsLeft, node)
+	return { x = ring.x, y = ring.y, z = ring.z, kind = (ok and left) and "roundabout_lht" or "roundabout",
+		cross = cross or false, shift = 0 }
+end
+
 local function refreshConfigured()
 	local now = api.util.getApplicationTime()
 	if configured.time and now - configured.time < CONFIGURED_REFRESH then return end
@@ -1540,18 +1590,29 @@ local function refreshConfigured()
 	configured.version = configured.version + 1
 	local typeId = invisibleType()
 	local list = {}
+	local ringsShown = {}
 	if typeId then
 		for node, segs in pairs(api.engine.system.streetSystem.getNode2SegmentMap()) do
 			if #segs >= 3 and api.engine.getComponent(node, CT.BASE_NODE_TRAFFIC_LIGHT) then
 				local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
 				if cfg and cfg.trafficLightConfig.trafficLightType == typeId then
 					local icons = {}
+					local ringSeg = nil
 					for seg, kind in pairs(configuredRoles(cfg)) do
 						local p = approachPoint(seg, node)
 						if p then
 							p.kind, p.cross, p.shift = kind, false, 0
 							icons[#icons + 1] = p
 						end
+						if kind == "priority" then ringSeg = ringSeg or seg end
+					end
+					-- A roundabout's centre icon, once per ring, with the first of its junctions
+					-- found (so hovering the ring replaces it with the preview's, as the rest).
+					local okRing, ring = false, false
+					if ringSeg and isEdge(ringSeg) then okRing, ring = pcall(ringOf, ringSeg) end
+					if okRing and ring and not ringsShown[ring] then
+						ringsShown[ring] = true
+						icons[#icons + 1] = ringIcon(ring, node)
 					end
 					list[#list + 1] = { node = node, icons = icons }
 				end
@@ -1563,6 +1624,7 @@ end
 
 local function configuredChanged()
 	configured.time = nil
+	ringCache = {}
 end
 
 -- The icon layer: a full-screen, mouse-transparent layer (as the town window's legend, via
@@ -2105,9 +2167,18 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			end
 			children[#children + 1] = builtin.EdgeRenderable{ edges = edges, ignoreDepth = true }
 		end
+		-- The hovered roundabout's centre icon (crossed out when the click removes it).
+		local planIcons = plan and plan.icons or {}
+		if plan and plan.round and plan.segs and plan.junctions[1] then
+			local okRing, centre = pcall(ringCentre, plan.segs)
+			if okRing then
+				planIcons = { ringIcon(centre, plan.junctions[1].node, plan.remove) }
+				for _, ic in ipairs(plan.icons or {}) do planIcons[#planIcons + 1] = ic end
+			end
+		end
 		children[#children + 1] = builtin.FullScreenComponent{
 			recipe = IconOverlay,
-			param = { planIcons = plan and plan.icons or {}, planNodes = plan and plan.nodes or {},
+			param = { planIcons = planIcons, planNodes = plan and plan.nodes or {},
 				gameCtx = params.gameCtx },
 		}
 
