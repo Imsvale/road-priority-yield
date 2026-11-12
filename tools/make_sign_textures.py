@@ -189,6 +189,11 @@ def from_artwork(path, n=FACE_SIZE):
     return n, [tuple(int(v) for v in px[y, x]) + (255,) for y in range(n) for x in range(n)]
 
 
+def mirror(n, px):
+    """The image flipped left to right."""
+    return [px[y * n + (n - 1 - x)] for y in range(n) for x in range(n)]
+
+
 def solid(n, col):
     return n, [col + (255,)] * (n * n)
 
@@ -228,14 +233,21 @@ def write_dds(path, n, px):
 if __name__ == "__main__":
     placeholders = {"yield_face.dds": yield_face, "yield_no_face.dds": yield_face,
                     "roundabout_face.dds": roundabout_face, "priority_face.dds": priority_face}
+    faces = {}
     for tex, make in placeholders.items():
         art = os.path.join(SOURCE, ARTWORK[tex])
         if os.path.exists(art):
             print("artwork", art)
-            write_dds(os.path.join(OUT, tex), *from_artwork(art))
+            faces[tex] = from_artwork(art)
         else:
             print("placeholder for", tex)
-            write_dds(os.path.join(OUT, tex), *make())
+            faces[tex] = make()
+        write_dds(os.path.join(OUT, tex), *faces[tex])
+    # Left-hand traffic: the roundabout sign mirrored, its arrows going clockwise (the user's
+    # gui/roundabout-lht.tga is the same mirror at icon size, 2026-11-12). The other faces are
+    # symmetrical.
+    n, px = faces["roundabout_face.dds"]
+    write_dds(os.path.join(OUT, "roundabout_lht_face.dds"), n, mirror(n, px))
     write_dds(os.path.join(OUT, "sign_metal.dds"), *solid(16, METAL))
     if os.path.exists(TEXCONV):
         # -bc x: BC7's slowest, best search; the levels written above are kept

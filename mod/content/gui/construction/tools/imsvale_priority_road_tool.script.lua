@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 75 (signs on the side the roads say traffic keeps to; none before 1950)"
+local VERSION = "priority road 76 (roundabout sign mirrored for left-hand traffic)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -908,8 +908,11 @@ local function registerJunction(job, settings)
 	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, param))
 end
 
-local function signFile(style, round)
-	return (round and "imsvale_yield_roundabout_sign" or "imsvale_yield_sign") .. (style == "no" and "_no" or "") .. ".con"
+-- left: left-hand traffic, where the roundabout sign's arrows go clockwise (its own model, sharing
+-- the right-hand one's mesh with a mirrored texture; the other faces are symmetrical).
+local function signFile(style, round, left)
+	return (round and "imsvale_yield_roundabout_sign" or "imsvale_yield_sign") .. (style == "no" and "_no" or "")
+		.. (round and left and "_lht" or "") .. ".con"
 end
 
 -- A lane config carries pedestrians: its transport modes include PERSON. How a built road's
@@ -1060,10 +1063,11 @@ local function placeAt(transfs, file, name, label, done)
 end
 
 -- Build signs for the given approaches of one junction; done(asset ids).
-local function placeSigns(node, segs, file, done)
+local function placeSigns(node, segs, style, round, done)
 	local transfs = {}
 	local okSide, left = pcall(keepsLeft, node)
 	left = okSide and left == true
+	local file = signFile(style, round, left)
 	for _, seg in ipairs(segs) do
 		local t = signTransf(seg, node, left)
 		if t then transfs[#transfs + 1] = t end
@@ -1108,7 +1112,7 @@ local function updateSigns(plan, style)
 				if role == "yield" then segs[#segs + 1] = seg end
 			end
 			local node, round = j.node, plan.round or false
-			placeSigns(node, segs, signFile(style, round), function(ids)
+			placeSigns(node, segs, style, round, function(ids)
 				log("node %d: %d signs", node, #ids)
 				storeSigns(node, ids, style, round)
 			end)
@@ -1134,7 +1138,7 @@ local function restyleAll(style)
 				end
 				removeSigns(entry.ids)
 				local round = entry.round or false
-				placeSigns(node, segs, signFile(style, round), function(ids)
+				placeSigns(node, segs, style, round, function(ids)
 					storeSigns(node, ids, style, round)
 				end)
 				count = count + 1
@@ -2416,7 +2420,7 @@ local function catchUpSigns()
 			end
 			local settings = type(j.settings) == "table" and j.settings or {}
 			local style, round = settings.style or SIGN_STYLES[1], j.round or false
-			placeSigns(node, segs, signFile(style, round), function(ids)
+			placeSigns(node, segs, style, round, function(ids)
 				storeSigns(node, ids, style, round)
 			end)
 			count = count + 1
