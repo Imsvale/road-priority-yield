@@ -54,11 +54,15 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 77 (roundabout icon in the centre of roundabouts)"
+local VERSION = "priority road 78 (lane rules traced on dev: traceLanes)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
 local phases = ug_require "/scripts/imsvale_yield_phases.lua"
+-- Dev switches (all off in a release; on the dev branch, dev mode fills them in). Under pcall: a
+-- failing require would break the whole game UI.
+local devOk, dev = pcall(ug_require, "/scripts/imsvale_yield_dev.lua")
+if not devOk or type(dev) ~= "table" then dev = {} end
 local PLANS = phases.PLANS
 local MAX_TURN = 45            -- degrees: how far the priority road may bend at a junction
 local ROUND_TOLERANCE = 0.12   -- a loop is a roundabout if every sample is within 12 % of the mean radius
@@ -737,6 +741,8 @@ local function send(node, tl, preference, done)
 	end)
 end
 
+local traceLanes -- (node, kind, cfg, conns, states): defined after keepsLeft, below
+
 -- Apply (or remove) at every junction; `done(okCount, failCount)` once all have answered.
 -- `lanes`: { overwrite = bool, dedicated = bool } from the tool's settings. `onJob(job, success)`
 -- after each junction (job: node, a, b, round, remove).
@@ -778,6 +784,10 @@ local function apply(plan, done, lanes, onJob)
 				if states then
 					tl.states = states
 					job.conns, job.cfg = conns, cfg
+				end
+				if dev.traceLanes then
+					local tOk, tErr = pcall(traceLanes, j.node, planHere.lanes, cfg, conns, states)
+					if not tOk then log("trace lanes at node %d: %s", j.node, tostring(tErr)) end
 				end
 			end
 			jobs[#jobs + 1] = job
@@ -980,6 +990,42 @@ local function keepsLeft(node)
 	end
 	if left == right then return nil end
 	return left > right
+end
+
+-- Dev switch traceLanes: what the lane rules made of a junction ("junction" rewriteLanes,
+-- "roundabout" roundaboutLanes): the side read from its roads, the connections before and after
+-- ("road:lane>road:lane", lane numbers as seen from the node looking out along each road), and any
+-- left with no green phase, which would strand cars in that lane (2026-11-12, for left-hand traffic).
+traceLanes = function(node, kind, cfg, conns, states)
+	local function list(cs)
+		local parts = {}
+		for _, c in ipairs(cs) do
+			parts[#parts + 1] = c.segment0 .. ":" .. c.lane0 .. ">" .. c.segment1 .. ":" .. c.lane1
+		end
+		return #cs .. ": " .. table.concat(parts, " ")
+	end
+	local okSide, left = pcall(keepsLeft, node)
+	local side = not okSide and "error" or (left == true and "left") or (left == false and "right") or "can't tell"
+	log("trace lanes: node %d, %s rule, traffic keeps %s", node, tostring(kind), side)
+	log("trace lanes:   before %s", list(cfg.laneConnections))
+	log("trace lanes:   after  %s", list(conns))
+	if states then
+		local dark = {}
+		for i, c in ipairs(conns) do
+			local green = false
+			for _, st in ipairs(states) do
+				local locked = false
+				for _, l in ipairs(st.lockedLanes) do
+					if l == i - 1 then locked = true break end
+				end
+				if not locked then green = true break end
+			end
+			if not green then dark[#dark + 1] = c.segment0 .. ":" .. c.lane0 .. ">" .. c.segment1 .. ":" .. c.lane1 end
+		end
+		if #dark > 0 then log("trace lanes:   NO GREEN %d: %s", #dark, table.concat(dark, " ")) end
+	else
+		log("trace lanes:   no phases for these lanes")
+	end
 end
 
 -- The side for a whole road: its junctions vote (right if none can tell).
