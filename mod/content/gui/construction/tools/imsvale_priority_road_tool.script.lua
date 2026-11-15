@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 104 (no tooltip where nothing applies)"
+local VERSION = "priority road 105 (Ctrl-click taken from the mouse events)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2706,6 +2706,49 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 		-- No hover outline: the lines above show what a click does (user, 2026-10-21).
 		local none = color_util.withTransparency(constructionColors.Modifier.Valid, 0)
+		-- A click on a picked entity (a road segment or a junction node).
+		local function click(picked)
+			if pending:old() then return true end
+			local entity, t = resolveTarget(picked)
+			if not entity then return true end
+			local p, w = planFor(entity, t, ctrlHeld())
+			if not p then
+				if w then message:set(tostring(w)) end
+				return true
+			end
+			pending:set(true)
+			log("%s from segment %d: %s at %d junctions", p.kind, entity, p.remove and "removing" or "applying",
+				p.remove and p.ours or p.entries)
+			local lanes = laneSettings()
+			log("lanes: overwrite %s, dedicated %s, roundabout exit %s", tostring(lanes.overwrite),
+				tostring(lanes.dedicated), lanes.exitStyle)
+			local applied = { overwrite = lanes.overwrite, dedicated = lanes.dedicated, exitStyle = lanes.exitStyle,
+				style = (currentStyle()), diamonds = diamondSettings() }
+			apply(p, function(okCount, failCount)
+				configuredChanged()
+				local style, raw = currentStyle()
+				log("sign style parameter %s -> %s", tostring(raw), style)
+				local signsOk, signsErr = pcall(updateSigns, p, style)
+				if not signsOk then log("signs failed: %s", tostring(signsErr)) end
+				-- One junction (Shift) or those on screen (the default): the road's priority signs
+				-- redone on its applied links, from the world as it is now; the whole road (Ctrl):
+				-- placed from the plan, as before.
+				local dOk, dErr
+				if p.single or p.screen then
+					dOk, dErr = pcall(redoRoadDiamonds, { { seg = entity } }, true)
+				else
+					dOk, dErr = pcall(updateDiamonds, p)
+				end
+				if not dOk then log("priority signs failed: %s", tostring(dErr)) end
+				log("%s: %d ok, %d failed", p.remove and "removed" or "applied", okCount, failCount)
+				message:set(failCount > 0 and string.format("Refused at %d junctions", failCount) or nil)
+				pending:set(false)
+				revision:set(revision:old() + 1)
+			end, lanes, function(job, success)
+				if success then registerJunction(job, applied) end
+			end)
+			return true
+		end
 		children[#children + 1] = builtin.Selector{
 			selectionColor = none,
 			selectionOutlineColor = none,
@@ -2714,48 +2757,20 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				local e = (isEdge(entity) or isJunctionNode(entity)) and entity or nil
 				if e ~= hovered:old() then hovered:set(e) end
 			end,
+			-- With Ctrl held the Selector reports no click (user, 2026-11-15: Ctrl showed the whole
+			-- road, the click did nothing), so a Ctrl-click is taken from the mouse events, on the
+			-- entity last hovered; onSelect leaves Ctrl-clicks to it so none runs twice.
 			onSelect = function(entity)
-				if pending:old() then return true end
-				local picked = entity
-				local entity, t = resolveTarget(picked)
-				if not entity then return true end
-				local p, w = planFor(entity, t, ctrlHeld())
-				if not p then
-					if w then message:set(tostring(w)) end
-					return true
+				if ctrlHeld() then return true end
+				return click(entity)
+			end,
+			onProcessMouseEvent = function(evt)
+				if evt.type == api.gui.mouse.Event.Type.Clicked and evt.button == 0 and ctrlHeld() then
+					local e = hovered:old()
+					log("Ctrl-click on %s", tostring(e))
+					if e then click(e) end
 				end
-				pending:set(true)
-				log("%s from segment %d: %s at %d junctions", p.kind, entity, p.remove and "removing" or "applying",
-					p.remove and p.ours or p.entries)
-				local lanes = laneSettings()
-				log("lanes: overwrite %s, dedicated %s, roundabout exit %s", tostring(lanes.overwrite),
-					tostring(lanes.dedicated), lanes.exitStyle)
-				local applied = { overwrite = lanes.overwrite, dedicated = lanes.dedicated, exitStyle = lanes.exitStyle,
-					style = (currentStyle()), diamonds = diamondSettings() }
-				apply(p, function(okCount, failCount)
-					configuredChanged()
-					local style, raw = currentStyle()
-					log("sign style parameter %s -> %s", tostring(raw), style)
-					local signsOk, signsErr = pcall(updateSigns, p, style)
-					if not signsOk then log("signs failed: %s", tostring(signsErr)) end
-					-- One junction (Shift) or those on screen (the default): the road's priority signs
-					-- redone on its applied links, from the world as it is now; the whole road (Ctrl):
-					-- placed from the plan, as before.
-					local dOk, dErr
-					if p.single or p.screen then
-						dOk, dErr = pcall(redoRoadDiamonds, { { seg = entity } }, true)
-					else
-						dOk, dErr = pcall(updateDiamonds, p)
-					end
-					if not dOk then log("priority signs failed: %s", tostring(dErr)) end
-					log("%s: %d ok, %d failed", p.remove and "removed" or "applied", okCount, failCount)
-					message:set(failCount > 0 and string.format("Refused at %d junctions", failCount) or nil)
-					pending:set(false)
-					revision:set(revision:old() + 1)
-				end, lanes, function(job, success)
-					if success then registerJunction(job, applied) end
-				end)
-				return true
+				return false
 			end,
 			filter = function(entity)
 				return isEdge(entity) or isJunctionNode(entity)
