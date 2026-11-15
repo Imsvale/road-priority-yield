@@ -63,6 +63,11 @@ is a different test (a section of its own, still to do).
   - Either B or C wants the supplementary plate under the diamond (a new sign model), and the
     yield signs as they are.
   - My recommendation: A for the release, B after it.
+  - **Decided (user, 2026-11-15):** turning priority roads after the release; a limitation of the
+    first version. The user's ideas for it: Shift-click to mark single segments (as other tools
+    in the game do), as a stop-gap; later, Shift-drawing a line through two or more segments to set
+    the priority road's route through a junction, every other road into that junction yielding
+    (whatever its status upstream).
 
 ### b. A bend of about 41°, then a near-straight side road joined at the bend
 
@@ -79,9 +84,12 @@ is a different test (a section of its own, still to do).
   take it on either: at 8093 the arm straight on is now the side road, so the walk no longer leads
   to the junction it remembered.
 - **Suggestions (not built):**
-  - **Signs where the player builds:** when a build (the player's: towns raise no build events)
-    adds a segment at a node where our priority signs hang (a key "node:…" in `diamonds`), redo that
-    road's signs (`redoRoadDiamonds`). Event-driven, cheap; doesn't cover towns.
+  - **Signs where the player builds: built in 82** (user, 2026-11-15: "remove those signs that are
+    too close to the junction on either side, then reapply signs as per existing rules"). After the
+    player's build, a new junction on a road with our priority signs gets those roads' signs redone:
+    the ones near it move, the rest are kept; only on the applied road's own links. Event-driven;
+    doesn't cover towns. **Retest** with the 2b setup: the sign at the bend should move out of the
+    junction.
   - **The bend:** log the turn angle where the walk stops (a dev trace), to see whether 41° on the
     ground measures over 45° at the node, and whether `MAX_TURN` should be larger or measured
     further from the node.

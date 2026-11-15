@@ -27,6 +27,8 @@
 --     (2026-10-19; sig since priority road 73),
 --   junctions = { ["<node>"] = { a, b, round, typeId, fp, ph, handEdited, pending, settings,
 --     ahead = { a = { seg, node }, b = { seg, node } }, repair (always) | gone | check } },
+--   signCheck = { ["<node>"] = true }: new junctions (the player's builds) whose nearby priority
+--     signs the tool is to redo; it sends kind "signCheck" when done (priority road 82),
 --   nextCheck = seconds, t = seconds, (follow = bool: the old switch, ignored since priority road 47)
 -- }
 -- (before 2026-10-18 evening a sign entry was the bare id list; the tool reads both).
@@ -159,6 +161,29 @@ local function beforeBuild(s, street)
 				node0 = e.node0, node1 = e.node1,
 				dir0 = unit(e.tangent0.x, e.tangent0.y), dir1 = unit(-e.tangent1.x, -e.tangent1.y),
 			}
+		end
+	end
+end
+
+-- After a build: nodes of its new segments that are junctions now (3+ roads) and not ours, noted
+-- for a priority sign check (`signCheck`), if any priority signs are stored. A road joined to a
+-- priority road makes a junction there, and signs placed when it was plain road (a start sign at
+-- a bend, a repeat sign) may stand inside it or too close: the tool redoes the signs of the roads
+-- through it (2026-11-15). The player's builds only: towns raise no build events.
+local function noteSignChecks(s, street)
+	if not s.diamonds or next(s.diamonds) == nil then return end
+	local seen = {}
+	for _, x in ipairs(items(street.addedSegments)) do
+		local e = x.comp
+		if x.entity and x.entity >= 0 and e then
+			for _, n in ipairs({ e.node0, e.node1 }) do
+				if not seen[n] and not (s.junctions and s.junctions[tostring(n)]) and api.engine.entityExists(n)
+					and #items(api.engine.system.streetSystem.getNodeStreetSegments(n)) >= 3 then
+					s.signCheck = s.signCheck or {}
+					s.signCheck[tostring(n)] = true
+				end
+				seen[n] = true
+			end
 		end
 	end
 end
@@ -469,7 +494,12 @@ local function handleEvent(_userParams, state, _src, id, name, param)
 		local ok, err = pcall(function()
 			local street = param[1] and param[1].proposal
 			if not street then return end
-			if name == "onPreBuildProposal" then beforeBuild(s, street) else afterBuild(s, street) end
+			if name == "onPreBuildProposal" then
+				beforeBuild(s, street)
+			else
+				afterBuild(s, street)
+				noteSignChecks(s, street)
+			end
 		end)
 		if not ok then log("follow road edits: %s", tostring(err)) end
 		state:set(s)
@@ -503,6 +533,9 @@ local function handleEvent(_userParams, state, _src, id, name, param)
 				settings = type(param.settings) == "table" and param.settings or nil,
 				ph = type(param.ph) == "table" and param.ph or nil }
 		end
+	elseif kind == "signCheck" and param.node ~= nil then
+		-- the tool has checked the signs around this junction
+		if s.signCheck then s.signCheck[tostring(param.node)] = nil end
 	elseif kind == "reset" then
 		s.signs, s.diamonds, s.junctions, s.replaced = nil, nil, nil, nil
 		log("uninstall: records cleared")

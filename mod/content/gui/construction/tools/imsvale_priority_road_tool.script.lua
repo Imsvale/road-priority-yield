@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 81 (no yield sign on a very short link between two junctions)"
+local VERSION = "priority road 82 (priority signs redone around a new junction on a priority road)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -441,6 +441,12 @@ local function planFrom(seg)
 	local function belongs(k)
 		local l = links[k]
 		return priorityAt(l.startNode, chainSegs[l.first]) or priorityAt(l.endNode, chainSegs[l.last])
+	end
+	-- The segments of links that belong (for updateDiamonds' membersOnly: redoing an applied road's
+	-- signs without signing road beyond it that isn't ours).
+	plan.members = {}
+	for i = 1, n do
+		if belongs(linkOf[i]) then plan.members[chainSegs[i]] = true end
 	end
 	local hoveredIdx = nil
 	for i, x in ipairs(chainSegs) do if x == seg then hoveredIdx = i end end
@@ -1545,6 +1551,14 @@ local function updateDiamonds(plan)
 	local places, pts, nodes, keys = diamondPlaces(plan)
 	-- No signs before SIGN_YEAR: none wanted, so any left over go and none are placed.
 	if not plan.remove and not signsAllowed() then places = {} end
+	-- membersOnly (a sign check around a new junction): signs only on links that belong to the
+	-- applied road, not on road the tool's following now runs on into (2026-11-15).
+	if plan.membersOnly and plan.members then
+		for key in pairs(places) do
+			local seg = tonumber(tostring(key):match(":(%d+)$") or "")
+			if not (seg and plan.members[seg]) then places[key] = nil end
+		end
+	end
 	local left = roadKeepsLeft(plan)
 	-- Where each key's signs should stand.
 	local wanted = {}
@@ -2526,7 +2540,7 @@ end
 
 -- Priority signs for the given roads ({ seg, diamonds = the sign settings it was applied with }),
 -- each road once.
-local function redoRoadDiamonds(roads)
+local function redoRoadDiamonds(roads, membersOnly)
 	local done = {}
 	for _, r in ipairs(roads) do
 		if not done[r.seg] and isEdge(r.seg) then
@@ -2534,6 +2548,7 @@ local function redoRoadDiamonds(roads)
 			if ok and plan and not plan.round then
 				for _, x in ipairs(plan.segs) do done[x] = true end
 				plan.remove = false
+				plan.membersOnly = membersOnly
 				local saved = panelDiamonds
 				if type(r.diamonds) == "table" then panelDiamonds = r.diamonds end
 				local dOk, err = pcall(updateDiamonds, plan)
@@ -2604,6 +2619,32 @@ local function repair(todo)
 	redoRoadDiamonds(roads)
 end
 
+-- A new junction from the player's build (the game script's `signCheck`): the priority signs on
+-- the stretches next to it were placed when it was plain road (a start sign at a bend, a repeat)
+-- and may stand inside it or too close. Each road through it whose stretch next to it carries our
+-- signs gets its signs redone: the junction now counts in the layout, so those signs move to where
+-- the rules put them, and the rest stand where they should and are kept (sig). Only on links that
+-- belong to the applied road (membersOnly). The junction itself isn't made to yield: a junction new
+-- to a priority road is the player's to apply (2026-11-15).
+local function checkSignsAt(node)
+	if not api.engine.entityExists(node) then return end
+	local signed = {}
+	for key, ids in pairs(storedDiamonds()) do
+		local seg = tonumber(tostring(key):match(":(%d+)$") or "")
+		if seg and type(ids) == "table" and #ids > 0 then signed[seg] = true end
+	end
+	local roads = {}
+	for _, seg in ipairs(api.engine.system.streetSystem.getNodeStreetSegments(node)) do
+		local _, path = stretchFrom(seg, node)
+		for _, x in ipairs(path) do
+			if signed[x] then roads[#roads + 1] = { seg = seg } break end
+		end
+	end
+	if #roads == 0 then return end -- (any junction the player builds is noted: most are nowhere near)
+	log("new junction %d: priority signs redone on %d roads next to it", node, #roads)
+	redoRoadDiamonds(roads, true)
+end
+
 -- Signs held back before SIGN_YEAR (signsAllowed) are placed once the year comes: every registered
 -- junction without stored yield signs gets them, and the roads through them their priority signs.
 -- FollowRoadEdits calls this until signs are allowed; then it runs once and not again this session.
@@ -2668,6 +2709,20 @@ local function followRoadEdits()
 		follow.settle = FOLLOW_SETTLE
 		local rOk, err = pcall(repair, todo)
 		if not rOk then log("follow road edits: repair failed: %s", tostring(err)) end
+		return -- sign checks after the repairs have settled
+	end
+	-- New junctions whose nearby priority signs are to be redone (checkSignsAt), each once; the
+	-- game script forgets the note when told it's done.
+	for key in pairs(type(s.signCheck) == "table" and s.signCheck or {}) do
+		local node = tonumber(key)
+		if node then
+			local cOk, cErr = pcall(checkSignsAt, node)
+			if not cOk then log("priority signs at new junction %d: %s", node, tostring(cErr)) end
+		end
+		api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME,
+			{ kind = "signCheck", node = key }))
+		follow.settle = FOLLOW_SETTLE
+		return -- one at a time, so their sign builds don't race
 	end
 end
 
