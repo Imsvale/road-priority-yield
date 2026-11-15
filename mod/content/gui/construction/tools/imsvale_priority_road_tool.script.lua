@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 97 (menu preview image)"
+local VERSION = "priority road 98 (Shift: one junction at a time)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1554,12 +1554,19 @@ local function diamondPlaces(plan)
 		local d = math.min(cfg.spacing, gap / 2) + (node % (2 * jitter + 1)) - jitter
 		return math.max(1, math.min(gap - 1, d))
 	end
+	-- membersOnly (a redo on the applied road: around a new junction, after a Shift-click): a sign
+	-- means priority at the next junction ahead, so only toward one of ours (priority road 98,
+	-- 2026-11-15; the drops follow the same rule). Without it, a sign after a junction pointed at
+	-- one whose yielding was removed.
+	local oursAt = {}
+	for _, jj in ipairs(plan.junctions or {}) do if jj.ours then oursAt[jj.node] = true end end
+	local function towardOurs(jx) return not plan.membersOnly or (jx ~= nil and oursAt[jx.node] == true) end
 	if not loop then
 		local first, lastJ = js[1], js[#js]
 		local toFirst = (first and first.sIn or endS) - startS
-		add(1, startS + from(toFirst, nodes[1]), 1)
+		if towardOurs(first) then add(1, startS + from(toFirst, nodes[1]), 1) end
 		local fromLast = endS - (lastJ and lastJ.sOut or startS)
-		add(#nodes, endS - from(fromLast, nodes[#nodes]), -1)
+		if towardOurs(lastJ) then add(#nodes, endS - from(fromLast, nodes[#nodes]), -1) end
 	end
 	-- membersOnly: a junction where the applied road's links stop on one side is that road's end
 	-- there, so the sign into it is a start sign, placed always, not a repeat held to minGap
@@ -1570,12 +1577,14 @@ local function diamondPlaces(plan)
 		local segAhead, segBehind = segs[j.i], segs[j.i - 1] or segs[#segs]
 		local startAhead = members and memberSeg(segAhead) and not memberSeg(segBehind)
 		local startBehind = members and memberSeg(segBehind) and not memberSeg(segAhead)
+		local nextJ = js[k + 1] or (loop and js[1]) or nil
+		local prevJ = js[k - 1] or (loop and js[#js]) or nil
 		local nextIn = js[k + 1] and js[k + 1].sIn or (loop and js[1].sIn + L) or endS
 		local ahead = nextIn - j.sOut
-		if ahead >= cfg.minGap or startAhead then add(j.i, j.sOut + from(ahead, j.node), 1) end
+		if (ahead >= cfg.minGap or startAhead) and towardOurs(nextJ) then add(j.i, j.sOut + from(ahead, j.node), 1) end
 		local prevOut = js[k - 1] and js[k - 1].sOut or (loop and js[#js].sOut - L) or startS
 		local behind = j.sIn - prevOut
-		if behind >= cfg.minGap or startBehind then add(j.i, j.sIn - from(behind, j.node), -1) end
+		if (behind >= cfg.minGap or startBehind) and towardOurs(prevJ) then add(j.i, j.sIn - from(behind, j.node), -1) end
 	end
 	return places, pts, nodes, keys
 end
@@ -1735,7 +1744,76 @@ end
 local transparency = api.gui.genericRep.get(api.gui.genericRep.find("::/gui/main/transparency.gres")).data
 local selectionGres = api.gui.genericRep.get(api.gui.genericRep.find("::/gui/main/selection_colors.gres")).data
 
+-- Shift held (the game's IA_PRECISION_MODE, Shift by default, as its tools' "(Hold)" modes): the
+-- click acts on one junction, the end of the hovered segment's link nearest the mouse (user,
+-- 2026-11-15): applied if it isn't ours, with the hovered road through it (the straightest arm, as
+-- always), removed if it is. So the player decides how far a priority road goes, one junction at
+-- a time. Priority belongs to junctions, so a junction is the unit, not a segment.
+local function shiftHeld()
+	local held = false
+	pcall(function() held = api.gui.inputAction.modifierOnlyActionIsActive("IA_PRECISION_MODE") end)
+	return held
+end
+
+-- The junctions at the two ends of `seg`'s link (through plain nodes), cached per segment; an end
+-- that isn't a junction (a dead end) is left out. GUI module state.
+local linkEndsCache = {}
+local function linkEnds(seg)
+	local c = linkEndsCache[seg]
+	if c then return c end
+	local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+	c = {}
+	for _, from_ in ipairs({ e.node0, e.node1 }) do
+		local far = stretchFrom(seg, from_)
+		if far and #api.engine.system.streetSystem.getNodeStreetSegments(far) >= 3 then c[#c + 1] = far end
+	end
+	linkEndsCache[seg] = c
+	return c
+end
+
+-- The Shift target: the link end nearest the mouse (false when there is none).
+local function shiftTarget(seg)
+	local ends = linkEnds(seg)
+	if #ends == 0 then return false end
+	if #ends == 1 or not api.gui.mouse.hasTerrainPosition() then return ends[1] end
+	local m = api.gui.mouse.getTerrainPosition()
+	local best, bestD = false, math.huge
+	for _, n in ipairs(ends) do
+		local p = api.engine.getComponent(n, CT.BASE_NODE).position
+		local d = (p.x - m.x) ^ 2 + (p.y - m.y) ^ 2
+		if d < bestD then best, bestD = n, d end
+	end
+	return best
+end
+
+-- The road plan cut down to one junction (`node`): removed if it's ours, applied otherwise. Its own
+-- icons, lines over its two priority arms (and its yielding arms when applying).
+local function singlePlan(p, node)
+	for _, j in ipairs(p.junctions) do
+		if j.node == node then
+			local remove = j.ours
+			if not remove and not j.states then return nil, tostring(j.why or "Can't yield here") end
+			j.removeHere = remove
+			local sp = { kind = p.kind, round = p.round, typeId = p.typeId, seg0 = p.seg0, junctions = { j },
+				remove = remove, single = true, ours = remove and 1 or 0, entries = remove and 0 or 1,
+				applied = j.has and 1 or 0, skipped = 0, segs = { j.a, j.b }, removeSegs = { j.a, j.b },
+				ringSegs = p.segs, yieldSegs = {}, icons = {}, nodes = { [node] = true } }
+			for seg, role in pairs(remove and j.old or j.new) do
+				local q = approachPoint(seg, node)
+				if q then
+					q.kind, q.cross, q.shift = role, remove, 0
+					sp.icons[#sp.icons + 1] = q
+				end
+				if not remove and role == "yield" then sp.yieldSegs[#sp.yieldSegs + 1] = seg end
+			end
+			return sp
+		end
+	end
+	return nil, "No junction here"
+end
+
 local lastLog = nil -- plans are worked out on every redraw: log one only when it changes
+local redoRoadDiamonds -- (roads, membersOnly): defined with the road edits below
 
 -- Configured junctions (light type = ours) and their icons, rescanned every
 -- CONFIGURED_REFRESH seconds and right after an apply / remove. GUI module state persists for
@@ -2398,13 +2476,31 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 	local function actionFn()
 		local hovered = react.useState(nil)
+		-- Shift: the junction the click acts on (nil without Shift, false with no junction; see
+		-- shiftTarget), followed every step since the mouse moves within a segment.
+		local target = react.useState(nil)
+		react.onStep(function()
+			local s = hovered:old()
+			local t = nil
+			if s and shiftHeld() and isEdge(s) then
+				local ok, r = pcall(shiftTarget, s)
+				t = ok and r or false
+			end
+			if t ~= target:old() then target:set(t) end
+		end)
+
+		-- The plan for a hovered segment: the road, or with Shift one junction.
+		local function planFor(s, t)
+			local ok, p, w = pcall(planFrom, s)
+			if not ok then return nil, "error: " .. tostring(p) end
+			if not p or t == nil then return p, w end
+			if t == false then return nil, "No junction here" end
+			return singlePlan(p, t)
+		end
 
 		local seg = hovered:old()
 		local plan, why = nil, nil
-		if seg and not pending:old() then
-			local ok, p, w = pcall(planFrom, seg)
-			if ok then plan, why = p, w else why = "error: " .. tostring(p) end
-		end
+		if seg and not pending:old() then plan, why = planFor(seg, target:old()) end
 		if plan then
 			local line = string.format("%s from segment %d: %d segments, %d junctions (%d yield, %d skipped, %d applied)%s",
 				plan.kind, seg, #plan.segs, #plan.junctions, plan.entries, plan.skipped, plan.applied,
@@ -2441,7 +2537,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		-- The hovered roundabout's centre icon (crossed out when the click removes it).
 		local planIcons = plan and plan.icons or {}
 		if plan and plan.round and plan.segs and plan.junctions[1] then
-			local okRing, centre = pcall(ringCentre, plan.segs)
+			local okRing, centre = pcall(ringCentre, plan.ringSegs or plan.segs)
 			if okRing then
 				planIcons = { ringIcon(centre, plan.junctions[1].node, plan.remove) }
 				for _, ic in ipairs(plan.icons or {}) do planIcons[#planIcons + 1] = ic end
@@ -2465,9 +2561,14 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			end,
 			onSelect = function(entity)
 				if pending:old() then return true end
-				local ok, p, w = pcall(planFrom, entity)
-				if not ok or not p then
-					message:set(tostring(ok and w or p))
+				local t = nil
+				if shiftHeld() then
+					local okT, r = pcall(shiftTarget, entity)
+					t = okT and r or false
+				end
+				local p, w = planFor(entity, t)
+				if not p then
+					message:set(tostring(w))
 					return true
 				end
 				pending:set(true)
@@ -2484,7 +2585,14 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 					log("sign style parameter %s -> %s", tostring(raw), style)
 					local signsOk, signsErr = pcall(updateSigns, p, style)
 					if not signsOk then log("signs failed: %s", tostring(signsErr)) end
-					local dOk, dErr = pcall(updateDiamonds, p)
+					-- One junction (Shift): the road's priority signs redone on its applied links, from
+					-- the world as it is now; the whole road: placed from the plan, as before.
+					local dOk, dErr
+					if p.single then
+						dOk, dErr = pcall(redoRoadDiamonds, { { seg = entity } }, true)
+					else
+						dOk, dErr = pcall(updateDiamonds, p)
+					end
 					if not dOk then log("priority signs failed: %s", tostring(dErr)) end
 					log("%s: %d ok, %d failed", p.remove and "removed" or "applied", okCount, failCount)
 					message:set(failCount > 0 and string.format("Refused at %d junctions", failCount) or nil)
@@ -2666,7 +2774,7 @@ end
 -- Priority signs for the given roads ({ seg, diamonds = the sign settings it was applied with }),
 -- each road once, each sign key once (`handled`, see updateDiamonds). membersOnly: see
 -- updateDiamonds; a road with none of the applied road's links is then skipped.
-local function redoRoadDiamonds(roads, membersOnly)
+function redoRoadDiamonds(roads, membersOnly) -- assigns the local declared before the tool's action
 	local done, handled = {}, {}
 	for _, r in ipairs(roads) do
 		if not done[r.seg] and isEdge(r.seg) then
