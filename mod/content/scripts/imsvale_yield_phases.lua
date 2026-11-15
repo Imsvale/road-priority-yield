@@ -33,7 +33,7 @@ function M.junctionStates(node, a, b, cfg, round, conns)
 	for _, c in ipairs(conns) do
 		if not priority[c.segment0] then sideIn = sideIn + 1 sideSegs[c.segment0] = true end
 	end
-	if sideIn == 0 then return nil, "no side road leads in", sideSegs end
+	if sideIn == 0 then return nil, "No side road leads in", sideSegs end
 	local function phase(duration, green)
 		local st = api.type.TrafficLightState.new()
 		local locked = {}
