@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 102 (on screen: apply where nothing in view would be removed; lines over the part taken)"
+local VERSION = "priority road 103 (on screen: only where the hovered segment is in the part taken)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1895,12 +1895,19 @@ local function screenPlan(p)
 			hi = hi and math.max(hi, i) or i
 		end
 	end
+	local hoveredIn = false
 	if lo then
 		for i = math.max(1, lo - 1), math.min(#chainSegs, hi) do
 			sp.segs[#sp.segs + 1] = chainSegs[i]
 			sp.removeSegs[#sp.removeSegs + 1] = chainSegs[i]
+			if chainSegs[i] == p.seg0 then hoveredIn = true end
 		end
 	end
+	-- The hovered segment must be in that part: elsewhere along the road (a long stretch out of
+	-- town) the tool showed the lines on the junctions in view, the tooltip at the cursor, and the
+	-- click acted on them, three things in different places (user, 2026-11-15; priority road 103).
+	-- Nothing then, no tooltip either: move to the junctions, or hold Ctrl for the whole road.
+	if not hoveredIn then return nil, nil end
 	return sp
 end
 
@@ -2733,7 +2740,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				if not entity then return true end
 				local p, w = planFor(entity, t, ctrlHeld())
 				if not p then
-					message:set(tostring(w))
+					if w then message:set(tostring(w)) end
 					return true
 				end
 				pending:set(true)
