@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 90 (Back on the Uninstall button's window: the tool fires the quit from inside the menu)"
+local VERSION = "priority road 91 (Uninstall button in the tool's overlay, not a window: Back works again)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -886,7 +886,7 @@ local LANE_PARAM = "imsvaleOverwriteLanes"
 local DEDICATED_PARAM = "imsvaleDedicatedTurnLanes"
 -- "Uninstall" (priority road 48, 2026-10-20): a window counts what the mod has placed in the save
 -- and offers to remove all of it (removeAll), so the mod can be disabled safely. Opened by a button
--- under the construction menu's Settings window (UninstallButtonWindow, priority road 87): a tool's
+-- under the construction menu's Settings window (in the icon overlay, priority road 91): a tool's
 -- panel can't hold a plain button (../docs/GUI.md); until 86 it was a checkbox there.
 -- Tabs (user, 2026-10-19), as the game's road tool switches its panel with icon buttons at the
 -- top: SECTION_PARAM picks General / Roundabouts / Priority signs, and every other parameter is
@@ -1850,6 +1850,27 @@ end
 -- param: planIcons (the hovered road's preview), planNodes (its junctions, whose configured
 -- icons the preview replaces). The sign style comes from iconStyle.
 local UninstallPresence -- (param { gameCtx }): defined with Uninstall below, mounted here
+local toggleUninstall -- (): opens or closes the Uninstall window; defined with Uninstall below
+
+-- The construction menu's Settings window: where its bottom right corner is, as fractions of the
+-- screen, while it's visible (nil otherwise). Placed by its stylesheet (Window!construct-settings,
+-- ::/gui/construction/construction.css.lua): gravity { 1, 1 }, margin right 20, bottom 360, 400
+-- wide; scaled by the UI scale, read from its actual width against those 400.
+local SETTINGS_WINDOW_ID = "menu.construction.params.react"
+local UNINSTALL_GAP = 4 -- pixels (at UI scale 1) between the Settings window and the Uninstall button
+local function settingsCorner()
+	local visible = false
+	pcall(function() visible = api.gui.byId.isVisible(SETTINGS_WINDOW_ID) end)
+	if not visible then return nil end
+	local size = api.gui.camera.getSize()
+	local w, h = math.max(size.x, 1), math.max(size.y, 1)
+	local scale = 1
+	pcall(function()
+		local s = api.gui.byId.getSize(SETTINGS_WINDOW_ID)
+		if s and s.x > 0 then scale = s.x / 400 end
+	end)
+	return (w - 20 * scale) / w, (h - 360 * scale + UNINSTALL_GAP * scale) / h
+end
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
 	react.setMouseTransparent(true)
 
@@ -1894,6 +1915,8 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	local key = react.useState("")
 	react.onStep(function()
 		local parts = { tostring(configured.version), iconStyle }
+		local cx, cy = settingsCorner()
+		parts[#parts + 1] = cx and string.format("u%.4f,%.4f", cx, cy) or "u-"
 		for _, p in ipairs(layout()) do
 			parts[#parts + 1] = string.format("%.4f,%.4f,%d,%.2f", p.x, p.y, p.size, p.alpha)
 		end
@@ -1956,6 +1979,24 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 			h = 0,
 			v = 0,
 			item = UninstallPresence({ gameCtx = param.gameCtx }),
+		}
+	end
+	-- The Uninstall button, under the Settings window's bottom right corner (see toggleUninstall).
+	-- Not mouse-transparent, unlike the icons: it takes its clicks.
+	local cx, cy = settingsCorner()
+	if cx and toggleUninstall then
+		children[#children + 1] = builtin.FloatingLayoutChild{
+			localKey = "uninstallButton",
+			h = cx,
+			v = cy,
+			item = builtin.Button{
+				meta = {
+					class = "imsvale-uninstall-proxy-button",
+					styleSheet = styleutil.makeStyle{ anchorPoint = { 1.0, 0.0 } },
+				},
+				content = builtin.TextView{ text = "Uninstall" },
+				onClick = function() toggleUninstall() end,
+			},
 		}
 	end
 	return builtin.FloatingLayout{ meta = { mouseTransparent = true }, children = children }
@@ -2206,8 +2247,8 @@ local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallConte
 end)
 
 -- The window's state (GUI module state): `wanted` whether it should be open (the Uninstall button
--- toggles it, its X clears it), `open` whether it's up, `buttonOpen` whether the button's window is.
-local uninstall = { wanted = false, open = false, buttonOpen = false, quit = false, wc = nil }
+-- toggles it, its X clears it), `open` whether it's up.
+local uninstall = { wanted = false, open = false, wc = nil }
 
 local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstallWindow", builtin.Window, function(param)
 	return builtin.Window{
@@ -2229,49 +2270,17 @@ local function closeUninstall()
 	uninstall.open = false
 end
 
--- The Uninstall button (user, 2026-11-15): a tool's panel can't hold a plain button, so it lives in
--- a window of its own, frameless, hanging right under the construction menu's Settings window as
--- if part of it. That window can't be moved and grows upward from a fixed bottom edge, and the two
--- don't overlap, so which is in front never matters. Placed by the stylesheet, as the Settings
--- window is (Window!imsvale-uninstall-proxy). Shown while the tool is in use and the Settings
--- window is visible (the game can hide it).
-local SETTINGS_WINDOW_ID = "menu.construction.params.react"
-local UninstallButtonWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstallButton", builtin.Window, function(param)
-	return builtin.Window{
-		meta = { class = "imsvale-uninstall-proxy, no-close-button" },
-		title = "",
-		closable = false,
-		movable = false,
-		-- Back (Escape, right-click) goes to the window in front through its onClose, even one
-		-- that can't be closed: that's how the Settings window leaves the tool (its onClose fires
-		-- constructionMenuQuit, ConstructionParamsWindow in ::/gui/construction/construction.tl).
-		-- This window is added after it, so in front: without this, Back did nothing while the
-		-- tool was open (2026-11-15). Fired from here the event didn't reach the construction menu
-		-- (this window sits in the window container, not inside the menu; priority road 89), so
-		-- it only asks, and the tool's action fires it from inside the menu on its next step.
-		onClose = function()
-			log("back: passed on to the construction menu")
-			uninstall.quit = true
-		end,
-		content = builtin.Button{
-			meta = { class = "imsvale-uninstall-proxy-button" },
-			content = builtin.TextView{ text = "Uninstall" },
-			onClick = function() uninstall.wanted = not uninstall.wanted end,
-		},
-	}
-end)
+-- The Uninstall button (user, 2026-11-15): a tool's panel can't hold a plain button. In 87-90 it
+-- was a frameless window of its own under the Settings window, but a window in front of the
+-- Settings window blocked Back (Escape, right-click) while the tool was open, and Back never
+-- reached that window's onClose. Now it's an element of the tool's icon overlay (IconOverlay),
+-- outside the window stack, placed at the Settings window's bottom right corner (settingsCorner).
+toggleUninstall = function() uninstall.wanted = not uninstall.wanted end
 
-local function closeUninstallButton()
-	if uninstall.buttonOpen and uninstall.wc then
-		pcall(function() uninstall.wc.removeAllWindows(UninstallButtonWindow) end)
-	end
-	uninstall.buttonOpen = false
-end
-
--- Mounted in the icon overlay for as long as the tool is in use. Each step: the Uninstall button
--- shown while the Settings window is; the Uninstall window open while wanted (the button toggles
--- it, its X closes it); unmounting (the tool closed) closes both. Mounting it only while ticked didn't close the window on untick
--- (priority road 49-52, 2026-10-21): the overlay's param isn't refreshed by a panel change alone.
+-- Mounted in the icon overlay for as long as the tool is in use. Each step: the Uninstall window
+-- open while wanted (the button toggles it, its X closes it); unmounting (the tool closed) closes
+-- it. (Mounting it only while wanted didn't close the window, priority road 49-52, 2026-10-21: the
+-- overlay's param isn't refreshed by a panel change alone.)
 UninstallPresence = react.RegisterRecipe("ImsvaleRoadPriorityUninstallPresence", function(param)
 	react.setMouseTransparent(true)
 	react.onMount(function()
@@ -2279,14 +2288,6 @@ UninstallPresence = react.RegisterRecipe("ImsvaleRoadPriorityUninstallPresence",
 		if not uninstall.wc then log("uninstall: no window container") end
 	end)
 	react.onStep(function()
-		local settings = false
-		pcall(function() settings = api.gui.byId.isVisible(SETTINGS_WINDOW_ID) end)
-		if settings and not uninstall.buttonOpen and uninstall.wc then
-			local ok, err = pcall(function() uninstall.wc.addSingletonWindow(UninstallButtonWindow, {}) end)
-			if ok then uninstall.buttonOpen = true else log("uninstall button: %s", tostring(err)) end
-		elseif not settings and uninstall.buttonOpen then
-			closeUninstallButton()
-		end
 		local show = uninstall.wanted
 		if show and not uninstall.open and uninstall.wc then
 			local ok, err = pcall(function() uninstall.wc.addSingletonWindow(UninstallWindow, {}) end)
@@ -2297,7 +2298,6 @@ UninstallPresence = react.RegisterRecipe("ImsvaleRoadPriorityUninstallPresence",
 	end)
 	react.onUnmount(function()
 		closeUninstall()
-		closeUninstallButton()
 		uninstall.wanted = false
 	end)
 	return builtin.FloatingLayout{ meta = { mouseTransparent = true }, children = {} }
@@ -2340,12 +2340,6 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		if suppressNextStep:get() then
 			suppressNextStep:set(false)
 			react.fireEvent(nil, "constructionSetSuppressCallout", true)
-		end
-		-- Back on the Uninstall button's window: leave the tool as the Settings window does
-		-- (UninstallButtonWindow's onClose)
-		if uninstall.quit then
-			uninstall.quit = false
-			react.fireEvent(nil, "constructionMenuQuit")
 		end
 		if not params.isActive then return end
 		-- The priority sign sliders; a change that has settled rebuilds every road's signs.

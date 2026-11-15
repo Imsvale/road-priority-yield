@@ -45,31 +45,9 @@ function data()
 	a("Button!imsvale-uninstall-button:active", {
 		backgroundColor1 = color_util.getActiveFromRaw(colorDefault.AccentMedium),
 	})
-	-- The Uninstall button's window (UninstallButtonWindow, priority road 87): frameless (its
-	-- surface, contour and shadow transparent, the title bar hidden, as Ruler's pop-up buttons),
-	-- right under the construction menu's Settings window. That one is placed by gravity { 1, 1 }
-	-- and margin { 50, 20, 360, 0 }, its bottom edge 360 px above the screen's bottom
-	-- (Window!construct-settings, ::/gui/construction/construction.css.lua); this one the same way,
-	-- its height fixed (40) so a bottom margin of 360 - 40 puts its top at that edge (in game: right
-	-- under it, user 2026-11-15). As wide as its button, its right edge at the Settings window's
-	-- (margin right 20), so the button sits at that window's bottom right corner (priority road 88;
-	-- 87 had it 400 wide). Stylesheet sizes scale with the UI scale, so both move together.
-	a("Window!imsvale-uninstall-proxy", {
-		gravity = { 1.0, 1.0 },
-		anchorPoint = { 1.0, 1.0 },
-		margin = { 0, 20, 320, 0 },
-		minSize = { -1, 40 },
-		maxSize = { -1, 40 },
-		backgroundColor1 = { 0, 0, 0, 0 },
-		borderColor = { 0, 0, 0, 0 },
-		shadowColor = { 0, 0, 0, 0 },
-	})
-	a("Window!imsvale-uninstall-proxy Window::TitleBar", {
-		visibility = "none",
-	})
-	a("Window!imsvale-uninstall-proxy Window::Content", {
-		padding = { 4, 0, 0, 0 },
-	})
+	-- The Uninstall button (priority road 91): an element of the tool's icon overlay, placed by the
+	-- tool at the Settings window's bottom right corner (settingsCorner). 87-90 put it in a window of
+	-- its own, which blocked Back while the tool was open.
 	-- The dimmer kind (user, 2026-11-15: it needn't stand out): the unselected toggle buttons'
 	-- BaseMedium, with the game's own hover border (Button:hover, builtin.css.lua).
 	a("Button!imsvale-uninstall-proxy-button", {
