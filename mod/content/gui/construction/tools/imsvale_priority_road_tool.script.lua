@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 89 (Back leaves the tool again: the Uninstall button's window passes it on)"
+local VERSION = "priority road 90 (Back on the Uninstall button's window: the tool fires the quit from inside the menu)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2207,7 +2207,7 @@ end)
 
 -- The window's state (GUI module state): `wanted` whether it should be open (the Uninstall button
 -- toggles it, its X clears it), `open` whether it's up, `buttonOpen` whether the button's window is.
-local uninstall = { wanted = false, open = false, buttonOpen = false, wc = nil }
+local uninstall = { wanted = false, open = false, buttonOpen = false, quit = false, wc = nil }
 
 local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstallWindow", builtin.Window, function(param)
 	return builtin.Window{
@@ -2246,8 +2246,13 @@ local UninstallButtonWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUn
 		-- that can't be closed: that's how the Settings window leaves the tool (its onClose fires
 		-- constructionMenuQuit, ConstructionParamsWindow in ::/gui/construction/construction.tl).
 		-- This window is added after it, so in front: without this, Back did nothing while the
-		-- tool was open (2026-11-15).
-		onClose = function() react.fireEvent(nil, "constructionMenuQuit") end,
+		-- tool was open (2026-11-15). Fired from here the event didn't reach the construction menu
+		-- (this window sits in the window container, not inside the menu; priority road 89), so
+		-- it only asks, and the tool's action fires it from inside the menu on its next step.
+		onClose = function()
+			log("back: passed on to the construction menu")
+			uninstall.quit = true
+		end,
 		content = builtin.Button{
 			meta = { class = "imsvale-uninstall-proxy-button" },
 			content = builtin.TextView{ text = "Uninstall" },
@@ -2335,6 +2340,12 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		if suppressNextStep:get() then
 			suppressNextStep:set(false)
 			react.fireEvent(nil, "constructionSetSuppressCallout", true)
+		end
+		-- Back on the Uninstall button's window: leave the tool as the Settings window does
+		-- (UninstallButtonWindow's onClose)
+		if uninstall.quit then
+			uninstall.quit = false
+			react.fireEvent(nil, "constructionMenuQuit")
 		end
 		if not params.isActive then return end
 		-- The priority sign sliders; a change that has settled rebuilds every road's signs.
