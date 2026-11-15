@@ -59,6 +59,7 @@ What to test or fix before the mod goes public, most important first. Tick items
    - 1d retested: pass (no yield signs on the short link).
    - **2, the priority road turning at a junction:** open questions, nothing broken for the release beyond (b): a priority sign placed at a bend ended up inside a junction built there afterwards. Suggestions in `release-testing-results.md`: for the release, a turning priority road stays two roads (document it); a turning route and sign refreshes on player builds after it.
    - **3, 5+ arms:** pass, also with "Overwrite lanes".
+   - **2b sign redo** (82-83): pass. **4, trams and bus lanes:** a, b pass; c found three bugs (a repair stuck after repeated edits, doubled start signs, a yield sign out in the road), fixed in 84: retest c.
    - Details of every test: `release-testing-results.md`.
    - **Still to do, a section of its own** (user): building onto roads already applied (a side road joined to a priority road, a T made a 4-way), as opposed to building first and applying after. Town growth (item 3) covered part of it.
    - Dual carriageways need no special case (each carriageway is a one-way priority road): yield signs on side roads everywhere; priority signs where the diamond is used (most of Europe, Norway), each carriageway its own (general knowledge, not checked against the regulations; the UK and US have no priority road sign).

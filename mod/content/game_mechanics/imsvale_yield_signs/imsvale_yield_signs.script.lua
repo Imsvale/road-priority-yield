@@ -165,6 +165,14 @@ local function beforeBuild(s, street)
 	end
 end
 
+-- Every mark (repair / gone) gets a number, so the tool's watcher hands a junction over again for
+-- a new mark even if it never saw it unmarked in between (2026-11-15: a junction marked again
+-- right after a repair stayed stuck: road upgrades one after another at 669).
+local function stamp(s, j)
+	s.markSeq = (s.markSeq or 0) + 1
+	j.markSeq = s.markSeq
+end
+
 -- After a build: nodes of its new segments that are junctions now (3+ roads) and not ours, noted
 -- for a priority sign check (`signCheck`), if any priority signs are stored. A road joined to a
 -- priority road makes a junction there, and signs placed when it was plain road (a start sign at
@@ -255,6 +263,7 @@ local function afterBuild(s, street)
 				j.repair, mark = true, "repair"
 			end
 			j.pending = nil
+			stamp(s, j)
 			log("road edit at node %s: marked %s", key, mark)
 		end
 	end
@@ -267,7 +276,7 @@ end
 -- build event, as by a town) isn't a reason: the junction is marked `repair` with the new segment
 -- instead (2026-10-22). For that, the direction each priority segment leaves the junction is
 -- remembered (`dirs`) while it's there.
-local function gone(node, j)
+local function gone(node, j, s)
 	if not api.engine.entityExists(node) then return "node gone" end
 	local segs = {}
 	for _, seg in ipairs(api.engine.system.streetSystem.getNodeStreetSegments(node)) do segs[seg] = true end
@@ -300,6 +309,7 @@ local function gone(node, j)
 			j[field] = new
 		end
 		j.repair, j.pending = true, nil
+		stamp(s, j)
 		return nil
 	end
 	local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
@@ -372,7 +382,7 @@ local function follow(s)
 	for key, j in pairs(s.junctions or {}) do
 		local node = tonumber(key)
 		local why = "bad entry"
-		if node then why = gone(node, j) end
+		if node then why = gone(node, j, s) end
 		local marked = j.repair or j.gone or j.check
 		if marked then why = false end -- the tool handles it (and removes its signs)
 		if why and not node then
@@ -382,6 +392,7 @@ local function follow(s)
 			-- the tool drops it: our signs removed, our light (if it still is) off, unregistered
 			log("follow lane edits: node %s handed over to drop (%s)", key, why)
 			j.gone, j.why = true, why
+			stamp(s, j)
 		elseif marked then
 			-- the tool repairs, drops or checks it
 		else
@@ -416,6 +427,7 @@ local function follow(s)
 				if verdict == "road edit" then
 					log("road edit at node %d (no build event; %s): marked repair", node, why)
 					j.repair = true
+				stamp(s, j)
 					j.fp, j.pending = fp, nil
 				elseif verdict ~= "rebuild" then
 					-- the player's own phases: theirs from now on (until applied again); lanes followed
@@ -428,6 +440,7 @@ local function follow(s)
 					if failed then
 						log("follow lane edits: node %d handed over to drop (%s)", node, failed)
 						j.gone, j.why = true, failed
+					stamp(s, j)
 					else
 						j.fp, j.pending = fp, nil
 						log("follow lane edits: node %d phases rebuilt for its new lanes", node)
@@ -437,7 +450,10 @@ local function follow(s)
 		end
 	end
 	-- (added after the loop: adding keys while traversing isn't allowed)
-	for node, entry in pairs(adopt) do s.junctions[tostring(node)] = entry end
+	for node, entry in pairs(adopt) do
+		stamp(s, entry)
+		s.junctions[tostring(node)] = entry
+	end
 end
 
 local function update(_userParams, state, dt)

@@ -102,7 +102,9 @@ is a different test (a section of its own, still to do).
        But "285:718" was placed twice, by both roads: one sign was left unrecorded (the mod can't
        remove it; bulldoze it by hand).
     Fixed in 83: start signs at the applied road's ends in this redo, and each sign key handled
-    once per redo. **Retest** setups 2 and 4.
+    once per redo. Retested (2026-11-15): a small bend with a side road joined almost straight on, and
+    the same with longer segments: priority signs placed again on both sides of the new junction,
+    start signs after it, a yield sign on the side road. Pass.
   - **The bend:** log the turn angle where the walk stops (a dev trace), to see whether 41° on the
     ground measures over 45° at the node, and whether `MAX_TURN` should be larger or measured
     further from the node.
@@ -115,3 +117,29 @@ is a different test (a section of its own, still to do).
 - **3.1-3.2:** pass. Signs right; lab dump (line 2185): phase #1 with every side road locked, so
   every side road yields, which is all the plan asks.
 - **3.3, "Overwrite lanes" on:** pass, no `NO GREEN` in the `traceLanes` lines (up to line 2307).
+
+## 4. Tram tracks and bus lanes (2026-11-15, priority road 83)
+
+- **a. Trams on the priority road:** they don't wait for side road traffic. Pass.
+- **b. Trams on a side road** (the same 4-way, trams on both axes): yielding trams yield, priority
+  trams don't, except now and then when a priority tram arrives just as a yielding one was let
+  through: a limitation of yielding by traffic light. Pass, within the mod's limits.
+- **c. Bus lanes** (roads upgraded to bus lanes one after another; log before line 1618):
+  - **Junction 669 lost its yielding.** Each upgrade replaced segments there and the game script
+    marked it for repair. The first repair ran (line 1444); the marks after it (1456, 1460, 1569,
+    1598) were never handed over. The tool's watcher forgot a hand-over only after seeing the
+    junction unmarked, and the next upgrade marked it again before that: taken for the old mark,
+    stuck for the session. The last mark replaced its priority segment (809 to 731), and our light
+    went with the upgrade.
+  - **Doubled start signs** after applying again: the stuck repair never ran its cleanup of priority
+    signs under segments that no longer exist (669:809, 498:794), and applying only cleared the
+    keys of the road's current segments.
+  - **A yield sign far from 669, in the road:** a sign's position starts from the approach's junction
+    edge, the mean of its lane curves' ends nearest the node. A road with bus lanes presumably has
+    lane pieces along the segment, whose nearest ends are far from the node and pulled the mean out
+    into the road (not confirmed: the log has no positions).
+  - Fixed in 84: marks are numbered and handed over again when the number changes; applying clears
+    priority signs at the road's nodes under segments that no longer exist; the junction edge only
+    uses lane ends within 10 m of the nearest one (`END_SPREAD`). **Retest c:** upgrade the roads
+    to bus lanes one after another, then check 669's yielding, its yield signs' positions, and the
+    start signs.

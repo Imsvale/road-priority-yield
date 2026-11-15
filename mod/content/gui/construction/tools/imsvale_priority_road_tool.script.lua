@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 83 (sign redo around a new junction: start signs at the applied road's ends, each key once)"
+local VERSION = "priority road 84 (repairs not stuck after repeated edits; stale priority signs cleared; junction edge ignores far lane pieces)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -79,6 +79,8 @@ local LINE_REMOVE = constructionColors.Bulldozer           -- a road about to lo
 -- Icons, drawn on screen at each approach's junction edge (see IconOverlay): on every junction
 -- already configured with this mod, and the hovered road's preview.
 local ICON_BACK = 6.0          -- metres back from the junction edge along the approach
+local END_SPREAD = 10.0        -- metres: lane ends further than this beyond the nearest one at a junction
+                               -- edge are pieces along the road, not the edge (approachPoint)
 local ICON_LIFT = 1.5          -- metres above the road
 local ICON_SIZE = 32           -- pixels at ICON_REF_DISTANCE from the camera
 local ICON_REF_DISTANCE = 150  -- metres
@@ -157,11 +159,24 @@ local function approachPoint(seg, node)
 	local tn = api.engine.getComponent(seg, CT.TRANSPORT_NETWORK)
 	local np = api.engine.getComponent(node, CT.BASE_NODE).position
 	local calc = api.engine.util.transport.calcPosition
-	local sx, sy, sz, n = 0, 0, 0, 0
+	-- Each lane edge's end nearer the node; then only those within END_SPREAD of the nearest one: a
+	-- road whose lanes come in pieces along the segment (bus lanes, presumably) has pieces whose
+	-- nearer end is far from the node, which pulled the point out into the road (2026-11-15, a yield
+	-- sign far from junction 669).
+	local ends, nearest = {}, math.huge
 	for _, e in ipairs(tn and tn.edges or {}) do
 		local a, b = calc(e.geometry, 0), calc(e.geometry, 1)
-		local p = ((a.x - np.x) ^ 2 + (a.y - np.y) ^ 2 <= (b.x - np.x) ^ 2 + (b.y - np.y) ^ 2) and a or b
-		sx, sy, sz, n = sx + p.x, sy + p.y, sz + p.z, n + 1
+		local da, db = (a.x - np.x) ^ 2 + (a.y - np.y) ^ 2, (b.x - np.x) ^ 2 + (b.y - np.y) ^ 2
+		local p, dist = a, math.sqrt(da)
+		if db < da then p, dist = b, math.sqrt(db) end
+		ends[#ends + 1] = { p = p, dist = dist }
+		nearest = math.min(nearest, dist)
+	end
+	local sx, sy, sz, n = 0, 0, 0, 0
+	for _, x in ipairs(ends) do
+		if x.dist <= nearest + END_SPREAD then
+			sx, sy, sz, n = sx + x.p.x, sy + x.p.y, sz + x.p.z, n + 1
+		end
 	end
 	if n == 0 then return nil end
 	local d = leaving(seg, node)
@@ -1608,6 +1623,15 @@ local function updateDiamonds(plan)
 	else
 		for _, key in ipairs(keys) do clear[#clear + 1] = key end
 		for _, node in ipairs(nodes) do clear[#clear + 1] = tostring(node) end
+		-- Signs stored at the road's nodes under segments that no longer exist (a road upgrade
+		-- whose repair never ran) aren't in `keys`: they'd stand beside the new signs
+		-- (2026-11-15, doubled start signs at 669).
+		local onRoad = {}
+		for _, node in ipairs(nodes) do onRoad[tostring(node)] = true end
+		for key in pairs(stored) do
+			local nd, sg = tostring(key):match("^(%d+):(%d+)$")
+			if nd and onRoad[nd] and not isEdge(tonumber(sg)) then clear[#clear + 1] = key end
+		end
 	end
 	-- plan.handled: keys an earlier road in the same round already removed or placed (roads that
 	-- share stretches, around a new junction): the stored records aren't updated yet, so a second
@@ -2439,7 +2463,7 @@ local FOLLOW_EVERY = 30
 -- right after an edit) raced it: the repair put signs back after the drop had cleared them
 -- (priority road 46, 2026-10-20).
 local FOLLOW_SETTLE = 120
-local follow = { steps = 0, handed = {}, settle = 0 } -- GUI module state
+local follow = { steps = 0, handed = {}, seq = {}, settle = 0 } -- GUI module state
 
 -- The junctions registered in the game script's state, by node (string keys).
 local function registeredJunctions()
@@ -2717,14 +2741,16 @@ local function followRoadEdits()
 	local todo = {}
 	for key, j in pairs(s.junctions) do
 		local mode = marked(j) and (j.gone and "drop" or "repair")
-		if mode and follow.handed[key] ~= mode then
-			follow.handed[key] = mode
+		-- handed over again for another mode, or a new mark (markSeq: the game script numbers each
+		-- one, so a junction marked again right after a repair isn't taken for the old mark)
+		if mode and (follow.handed[key] ~= mode or follow.seq[key] ~= j.markSeq) then
+			follow.handed[key], follow.seq[key] = mode, j.markSeq
 			todo[#todo + 1] = { node = tonumber(key), a = j.a, b = j.b, round = j.round, typeId = j.typeId,
 				settings = j.settings, mode = mode, why = j.why }
 		end
 	end
 	for key in pairs(follow.handed) do
-		if not marked(s.junctions[key]) then follow.handed[key] = nil end
+		if not marked(s.junctions[key]) then follow.handed[key], follow.seq[key] = nil, nil end
 	end
 	if #todo > 0 then
 		follow.settle = FOLLOW_SETTLE
