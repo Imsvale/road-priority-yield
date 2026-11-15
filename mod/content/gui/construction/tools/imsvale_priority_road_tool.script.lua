@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 92 (Uninstall button placement logged)"
+local VERSION = "priority road 93 (Uninstall button placed in screen pixels)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1854,8 +1854,10 @@ local toggleUninstall -- (): opens or closes the Uninstall window; defined with 
 
 -- The construction menu's Settings window: where its bottom right corner is, as fractions of the
 -- screen, while it's visible (nil otherwise). Placed by its stylesheet (Window!construct-settings,
--- ::/gui/construction/construction.css.lua): gravity { 1, 1 }, margin right 20, bottom 360, 400
--- wide; scaled by the UI scale, read from its actual width against those 400.
+-- ::/gui/construction/construction.css.lua): gravity { 1, 1 }, margin right 20, bottom 360. Taken
+-- in screen pixels: no UI scale can be read (no API for it), and api.gui.byId.getSize gives
+-- fractions of the screen, its frame and shadow included (420 x 536 px for a 400-wide window,
+-- 2026-11-15), so it can't give one either (92 took it for pixels: the button ended off screen).
 local SETTINGS_WINDOW_ID = "menu.construction.params.react"
 local UNINSTALL_GAP = 4 -- pixels (at UI scale 1) between the Settings window and the Uninstall button
 local cornerLogged = nil -- what settingsCorner last logged (GUI module state; a test aid)
@@ -1864,13 +1866,12 @@ local function settingsCorner()
 	okVis = pcall(function() visible = api.gui.byId.isVisible(SETTINGS_WINDOW_ID) end)
 	local size = api.gui.camera.getSize()
 	local w, h = math.max(size.x, 1), math.max(size.y, 1)
-	local scale, sx, sy = 1, nil, nil
+	local sx, sy = nil, nil
 	pcall(function()
 		local s = api.gui.byId.getSize(SETTINGS_WINDOW_ID)
 		sx, sy = s and s.x, s and s.y
-		if s and s.x > 0 then scale = s.x / 400 end
 	end)
-	local cx, cy = (w - 20 * scale) / w, (h - 360 * scale + UNINSTALL_GAP * scale) / h
+	local cx, cy = (w - 20) / w, (h - 360 + UNINSTALL_GAP) / h
 	local line = string.format("uninstall button: settings visible %s (%s), size %s x %s, screen %d x %d -> %.3f, %.3f",
 		tostring(visible), okVis and "read" or "failed", tostring(sx), tostring(sy), w, h, cx, cy)
 	if line ~= cornerLogged then
