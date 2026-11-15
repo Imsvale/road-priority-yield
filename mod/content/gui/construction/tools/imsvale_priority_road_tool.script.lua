@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 80 (one-way roads: signs only for traffic that drives there, on both sides)"
+local VERSION = "priority road 81 (no yield sign on a very short link between two junctions)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -873,6 +873,9 @@ local CLEAR_RAISED = 0.5       -- metres past the curb onto a raised sidewalk
 local CLEAR_LEVEL = 1.0        -- metres past the curb where there is no raised sidewalk (a level
                                -- pedestrian strip, a shoulder's edge, or nothing)
 local SIGN_YEAR = 1950         -- no signs before this game year (signsAllowed; user, 2026-11-07)
+local SHORT_LINK = 15          -- metres, junction edge to junction edge: an approach this short from
+                               -- another junction (a dual carriageway's median crossing) gets no yield
+                               -- sign; the two read as one junction (user, 2026-11-15)
 local SIGN_GAME_SCRIPT = "imsvale_road_priority_yield::/game_mechanics/imsvale_yield_signs/imsvale_yield_signs.gs"
 local SIGN_EVENT_ID = "imsvale_road_priority_yield"
 local SIGN_EVENT_NAME = "imsvale_yield_signs.set"
@@ -1163,7 +1166,22 @@ local function placeSigns(node, segs, style, round, done)
 	local okSide, left = pcall(keepsLeft, node)
 	left = okSide and left == true
 	local file = signFile(style, round, left)
-	for _, seg in ipairs(segs) do
+	-- How far `seg` runs from this junction's edge to the next junction's edge, through plain
+	-- nodes; nil if it ends somewhere else (a dead end).
+	local function linkLength(seg)
+		local far, path = stretchFrom(seg, node)
+		if #api.engine.system.streetSystem.getNodeStreetSegments(far) < 3 then return nil end
+		local a, b = junctionEdge(seg, node), junctionEdge(path[#path], far)
+		if not a or not b then return nil end
+		return math.sqrt((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2)
+	end
+	-- One approach's signs.
+	local function approach(seg)
+		local okLen, len = pcall(linkLength, seg)
+		if okLen and len and len < SHORT_LINK then
+			log("no sign on segment %d at node %d: %.1f m to the next junction", seg, node, len)
+			return
+		end
 		local t = signTransf(seg, node, left)
 		if t then transfs[#transfs + 1] = t end
 		-- A one-way approach (all its traffic coming in): a sign on the other side too, as on
@@ -1180,6 +1198,7 @@ local function placeSigns(node, segs, style, round, done)
 			if t2 then transfs[#transfs + 1] = t2 end
 		end
 	end
+	for _, seg in ipairs(segs) do approach(seg) end
 	placeAt(transfs, file, "Yield sign", "node " .. node, done)
 end
 
