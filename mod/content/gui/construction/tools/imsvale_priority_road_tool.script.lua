@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 99 (hovering a junction picks it)"
+local VERSION = "priority road 100 (on-screen junctions by default; Ctrl for the whole road)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1786,6 +1786,81 @@ local function shiftTarget(seg)
 	return best
 end
 
+-- Ctrl held (the game's IA_SECONDARY_MODE, Ctrl by default, the track tool's "(Hold) Flip Segment"):
+-- the click takes the whole road, however far it goes. Without it only the junctions on screen,
+-- as several of the game's tools work (user, 2026-11-15; priority road 100). Before 100 a click
+-- always took the whole road.
+local function ctrlHeld()
+	local held = false
+	pcall(function() held = api.gui.inputAction.modifierOnlyActionIsActive("IA_SECONDARY_MODE") end)
+	return held
+end
+
+-- Whether a node is on screen: its position projected inside the camera's view.
+local function onScreen(node)
+	local inside = false
+	pcall(function()
+		local p = api.engine.getComponent(node, CT.BASE_NODE).position
+		local q = api.gui.camera.world2Screen(api.type.Vec3f.new(p.x, p.y, p.z))
+		local size = api.gui.camera.getSize()
+		inside = q.x >= 0 and q.y >= 0 and q.x < size.x and q.y < size.y
+	end)
+	return inside
+end
+
+-- The camera, coarsely (10 m), so the default mode's preview follows it without a new plan for
+-- every pixel it moves.
+local function cameraKey()
+	local key = ""
+	pcall(function()
+		local e = api.gui.camera.getEye()
+		key = string.format("%d,%d,%d", math.floor(e.x / 10), math.floor(e.y / 10), math.floor(e.z / 10))
+	end)
+	return key
+end
+
+-- The road plan cut down to the junctions on screen (the default: without Ctrl). Roundabouts stay
+-- whole: a ring is one thing. Lines over the road's segments with a node on screen; icons for the
+-- junctions kept.
+local function screenPlan(p)
+	if p.round then return p end
+	local kept = {}
+	for _, j in ipairs(p.junctions) do
+		if (not p.remove or j.removeHere) and onScreen(j.node) then kept[#kept + 1] = j end
+	end
+	if #kept == 0 then return nil, "No junction on screen" end
+	local sp = { kind = p.kind, round = p.round, typeId = p.typeId, seg0 = p.seg0, junctions = kept,
+		remove = p.remove, screen = true, ours = 0, entries = 0, applied = 0, skipped = 0,
+		segs = {}, removeSegs = {}, yieldSegs = {}, icons = {}, nodes = {} }
+	for _, j in ipairs(kept) do
+		sp.nodes[j.node] = true
+		if j.has then sp.applied = sp.applied + 1 end
+		if p.remove then
+			sp.ours = sp.ours + 1
+		elseif j.states then
+			sp.entries = sp.entries + 1
+		else
+			sp.skipped = sp.skipped + 1
+		end
+		for seg, role in pairs(p.remove and j.old or j.new) do
+			local q = approachPoint(seg, j.node)
+			if q then
+				q.kind, q.cross, q.shift = role, p.remove, 0
+				sp.icons[#sp.icons + 1] = q
+			end
+			if not p.remove and role == "yield" then sp.yieldSegs[#sp.yieldSegs + 1] = seg end
+		end
+	end
+	for _, seg in ipairs(p.remove and (p.removeSegs or {}) or p.segs) do
+		local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+		if e and (onScreen(e.node0) or onScreen(e.node1)) then
+			sp.segs[#sp.segs + 1] = seg
+			sp.removeSegs[#sp.removeSegs + 1] = seg
+		end
+	end
+	return sp
+end
+
 -- A junction's node (3+ roads), which the tool's Selector also picks (priority road 99, user
 -- 2026-11-15: hovering the junction itself, which is what gets the priority, did nothing).
 local function isJunctionNode(e)
@@ -2528,22 +2603,28 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			local e = hovered:old()
 			local s, t = nil, nil
 			if e then s, t = resolveTarget(e) end
-			local key = tostring(s) .. ":" .. tostring(t)
-			if key ~= resolved:old().key then resolved:set({ key = key, seg = s, target = t }) end
+			local whole = ctrlHeld()
+			-- the default mode (on screen) follows the camera too
+			local view = (s and t == nil and not whole) and cameraKey() or ""
+			local key = tostring(s) .. ":" .. tostring(t) .. ":" .. tostring(whole) .. ":" .. view
+			if key ~= resolved:old().key then resolved:set({ key = key, seg = s, target = t, whole = whole }) end
 		end)
 
-		-- The plan for a hovered segment: the road, or with Shift one junction.
-		local function planFor(s, t)
+		-- The plan for a hovered segment: with Shift one junction (t), with Ctrl the whole road
+		-- (whole), else the road's junctions on screen.
+		local function planFor(s, t, whole)
 			local ok, p, w = pcall(planFrom, s)
 			if not ok then return nil, "error: " .. tostring(p) end
-			if not p or t == nil then return p, w end
+			if not p then return p, w end
 			if t == false then return nil, "No junction here" end
-			return singlePlan(p, t)
+			if t ~= nil then return singlePlan(p, t) end
+			if whole then return p, w end
+			return screenPlan(p)
 		end
 
 		local seg = resolved:old().seg
 		local plan, why = nil, nil
-		if seg and not pending:old() then plan, why = planFor(seg, resolved:old().target) end
+		if seg and not pending:old() then plan, why = planFor(seg, resolved:old().target, resolved:old().whole) end
 		if plan then
 			local line = string.format("%s from segment %d: %d segments, %d junctions (%d yield, %d skipped, %d applied)%s",
 				plan.kind, seg, #plan.segs, #plan.junctions, plan.entries, plan.skipped, plan.applied,
@@ -2607,7 +2688,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				local picked = entity
 				local entity, t = resolveTarget(picked)
 				if not entity then return true end
-				local p, w = planFor(entity, t)
+				local p, w = planFor(entity, t, ctrlHeld())
 				if not p then
 					message:set(tostring(w))
 					return true
@@ -2626,10 +2707,11 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 					log("sign style parameter %s -> %s", tostring(raw), style)
 					local signsOk, signsErr = pcall(updateSigns, p, style)
 					if not signsOk then log("signs failed: %s", tostring(signsErr)) end
-					-- One junction (Shift): the road's priority signs redone on its applied links, from
-					-- the world as it is now; the whole road: placed from the plan, as before.
+					-- One junction (Shift) or those on screen (the default): the road's priority signs
+					-- redone on its applied links, from the world as it is now; the whole road (Ctrl):
+					-- placed from the plan, as before.
 					local dOk, dErr
-					if p.single then
+					if p.single or p.screen then
 						dOk, dErr = pcall(redoRoadDiamonds, { { seg = entity } }, true)
 					else
 						dOk, dErr = pcall(updateDiamonds, p)
