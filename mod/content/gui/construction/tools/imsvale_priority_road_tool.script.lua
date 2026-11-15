@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 87 (Uninstall button under the Settings window; the checkbox is gone)"
+local VERSION = "priority road 88 (Uninstall button: dimmer, label-wide, in the Settings window's corner)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2243,7 +2243,7 @@ local UninstallButtonWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUn
 		closable = false,
 		movable = false,
 		content = builtin.Button{
-			meta = { class = "imsvale-uninstall-button, imsvale-uninstall-proxy-button" },
+			meta = { class = "imsvale-uninstall-proxy-button" },
 			content = builtin.TextView{ text = "Uninstall" },
 			onClick = function() uninstall.wanted = not uninstall.wanted end,
 		},
