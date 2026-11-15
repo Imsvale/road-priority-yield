@@ -192,3 +192,12 @@ is a different test (a section of its own, still to do).
   one backing into the other. Junctions too close together are a problem whoever controls them;
   without the mod, side traffic forces its way in and obstructs the main road far more. The mod
   only makes this better, so it tests nothing about the mod.
+
+## 8. Asymmetric roads and noise barriers (2026-11-15, priority road 95)
+
+- **a. Asymmetric road** (log before line 5891): a 3+2-lane priority road with a 2+1 side road, a
+  4-way: signs placed right. However a road's width is split into lanes, its centre line is at its
+  centre, so taking the curb as symmetric about it holds (user). Pass.
+- **b. Noise barriers:** they stand outside the sidewalk, well away from where the signs go. Pass.
+
+Item 6 done (sections 1-8).

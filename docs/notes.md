@@ -82,10 +82,10 @@ How the Priority Road tool places signs, what the user saw in game, and what is 
 1. **Crosswalks:** read where the junction's crosswalks are and put the sign just before them, instead of a fixed distance from the junction edge. Needs a way to find a crosswalk's position (`BASE_NODE_CONFIG.crosswalks` lists the crosswalk entities).
 2. **The crossing road's size:** the user expects it to matter most at the entry. Check whether the junction edge already captures it well enough, across small and large crossings.
 3. **Pedestrian lanes on built roads:** the tool recognises them by their `PERSON` transport mode, trying the enum value, its name and 0, since the stored form isn't documented. Its log line per sign ("curb … m from the centre") shows what it read; on the country road it should say 9 m.
-4. **Asymmetric roads** (one-way roads, roads with different sides): the curb is taken as symmetric about the centre line. The right-hand side's actual lanes are better.
-5. **Left-hand traffic:** the sign side and the roundabout sign's arrows assume right-hand traffic.
-6. **Noise barriers and other things beside the road:** options the user named: a sign mounted on the barrier, hiding the barrier's last section, or a gantry.
-7. **Multi-lane approaches and one-way entries:** a second sign on the left (median) side may be expected; one-way roads would need one there.
+4. **Asymmetric roads** (one-way roads, roads with different sides): the curb is taken as symmetric about the centre line. **Settled (2026-11-15):** tested on a 3+2-lane road with a 2+1 side road, placement right: however a road's width is split into lanes, its centre line is at its centre (user). One-way roads: done (priority road 80).
+5. **Left-hand traffic:** done (priority road 75-79): the side read from the roads, the roundabout sign mirrored, the roundabout lane rule mirrored.
+6. **Noise barriers and other things beside the road:** options the user named: a sign mounted on the barrier, hiding the barrier's last section, or a gantry. **Not needed for noise barriers (2026-11-15):** they stand outside the sidewalk, well away from where the signs go (user's test).
+7. **Multi-lane approaches and one-way entries:** a second sign on the left (median) side may be expected; one-way roads would need one there. One-way: done (priority road 80, a sign on each side).
 8. **Priority diamonds:** done (priority road 25): at the start of a priority road and 60 m after junctions, skipped between close junctions (see CLAUDE.md). Later: the speed limit + diamond combination common in Norway.
 
 ## Ideas
