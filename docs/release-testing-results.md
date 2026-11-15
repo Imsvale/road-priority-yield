@@ -188,4 +188,7 @@ is a different test (a section of its own, still to do).
   (the stretch is under 60 m). "signs 972/973: removal refused": the repair and the sign check both
   removing the same old signs; harmless.
 - **7.2:** with more time between: pass, yield signs at both, no priority sign between them.
-- **7.3:** to do: as 7.1 with one of the two a T (traffic queuing from one into the other).
+- **7.3, struck** (user, 2026-11-15): a 4-way and a T a few car lengths apart, traffic stopped at
+  one backing into the other. Junctions too close together are a problem whoever controls them;
+  without the mod, side traffic forces its way in and obstructs the main road far more. The mod
+  only makes this better, so it tests nothing about the mod.
