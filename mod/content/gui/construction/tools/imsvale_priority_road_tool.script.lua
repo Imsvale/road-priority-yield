@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 107 (tooltip: the action and its junction count)"
+local VERSION = "priority road 108 (roundabout tooltip; replaced roles shown in every mode)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -348,6 +348,38 @@ local junctionStates = phases.junctionStates -- (node, a, b, cfg, round, conns)
 -- Everything the hovered segment leads to: the priority road, its junctions, what yields.
 local chainOf -- (plan): the road's segments in order and its nodes; defined with the priority signs
 
+-- A junction's icons into `icons`: removing crosses out what's there (where `cross`); applying
+-- shows the new roles, and where a configured junction's role changes (a crossing road applied
+-- earlier), the old icon crossed out to the left of the new one. One rule for every mode: until
+-- priority road 108 the on-screen and Shift previews showed only the new roles.
+local function junctionIcons(j, remove, cross, icons)
+	local function icon(seg, kind, crossed, shift)
+		local p = approachPoint(seg, j.node)
+		if p then
+			p.kind, p.cross, p.shift = kind, crossed, shift or 0
+			icons[#icons + 1] = p
+		end
+	end
+	if remove or not j.states then
+		for s, kind in pairs(j.old) do icon(s, kind, remove and cross) end
+		return
+	end
+	local segsHere = {}
+	for s in pairs(j.old) do segsHere[s] = true end
+	for s in pairs(j.new) do segsHere[s] = true end
+	for s in pairs(segsHere) do
+		local old, new = j.old[s], j.new[s]
+		if new and (old == nil or old == new) then
+			icon(s, new, false)
+		elseif new then
+			icon(s, old, true, -1)
+			icon(s, new, false, 1)
+		else
+			icon(s, old, true)
+		end
+	end
+end
+
 local function planFrom(seg)
 	if not isEdge(seg) then return nil, "not a road" end
 	local e = api.engine.getComponent(seg, CT.BASE_EDGE)
@@ -502,33 +534,9 @@ local function planFrom(seg)
 	-- Icons: removing crosses out what's there; applying shows the new roles, and where a
 	-- configured junction's role changes, the old icon crossed out to the left of the new one.
 	plan.nodes = {}
-	local function icon(j, seg, kind, cross, shift)
-		local p = approachPoint(seg, j.node)
-		if p then
-			p.kind, p.cross, p.shift = kind, cross, shift or 0
-			plan.icons[#plan.icons + 1] = p
-		end
-	end
 	for _, j in ipairs(plan.junctions) do
 		plan.nodes[j.node] = true
-		if plan.remove or not j.states then
-			for s, kind in pairs(j.old) do icon(j, s, kind, plan.remove and j.removeHere) end
-		else
-			local segsHere = {}
-			for s in pairs(j.old) do segsHere[s] = true end
-			for s in pairs(j.new) do segsHere[s] = true end
-			for s in pairs(segsHere) do
-				local old, new = j.old[s], j.new[s]
-				if new and (old == nil or old == new) then
-					icon(j, s, new, false)
-				elseif new then
-					icon(j, s, old, true, -1)
-					icon(j, s, new, false, 1)
-				else
-					icon(j, s, old, true)
-				end
-			end
-		end
+		junctionIcons(j, plan.remove, j.removeHere, plan.icons)
 	end
 	-- nothing to apply to: no tooltip (user, 2026-11-15: "Priority road with no junctions on it"
 	-- named a priority road that wasn't one)
@@ -1860,13 +1868,11 @@ local function screenPlan(p)
 		else
 			sp.skipped = sp.skipped + 1
 		end
-		for seg, role in pairs(remove and j.old or j.new) do
-			local q = approachPoint(seg, j.node)
-			if q then
-				q.kind, q.cross, q.shift = role, remove, 0
-				sp.icons[#sp.icons + 1] = q
+		junctionIcons(j, remove, true, sp.icons)
+		if not remove then
+			for seg, role in pairs(j.new) do
+				if role == "yield" then sp.yieldSegs[#sp.yieldSegs + 1] = seg end
 			end
-			if not remove and role == "yield" then sp.yieldSegs[#sp.yieldSegs + 1] = seg end
 		end
 	end
 	-- the lines: along the road from the first kept junction to the last, one segment beyond each
@@ -1950,13 +1956,11 @@ local function singlePlan(p, node)
 				remove = remove, single = true, ours = remove and 1 or 0, entries = remove and 0 or 1,
 				applied = j.has and 1 or 0, skipped = 0, segs = { j.a, j.b }, removeSegs = { j.a, j.b },
 				ringSegs = p.segs, yieldSegs = {}, icons = {}, nodes = { [node] = true } }
-			for seg, role in pairs(remove and j.old or j.new) do
-				local q = approachPoint(seg, node)
-				if q then
-					q.kind, q.cross, q.shift = role, remove, 0
-					sp.icons[#sp.icons + 1] = q
+			junctionIcons(j, remove, true, sp.icons)
+			if not remove then
+				for seg, role in pairs(j.new) do
+					if role == "yield" then sp.yieldSegs[#sp.yieldSegs + 1] = seg end
 				end
-				if not remove and role == "yield" then sp.yieldSegs[#sp.yieldSegs + 1] = seg end
 			end
 			return sp
 		end
@@ -2786,7 +2790,14 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		if plan then
 			local n = plan.remove and plan.ours or plan.entries
 			if n and n > 0 then
-				text = string.format("%s %d junction%s", plan.remove and "Remove from" or "Apply to", n, n == 1 and "" or "s")
+				local verb = plan.remove and "Remove from" or "Apply to"
+				local count = string.format("%d junction%s", n, n == 1 and "" or "s")
+				-- a roundabout is taken whole: named as such, except with Shift (one junction)
+				if plan.round and not plan.single then
+					text = string.format("%s roundabout: %s", verb, count)
+				else
+					text = verb .. " " .. count
+				end
 				good = true
 			end
 		elseif seg and why then
