@@ -30,11 +30,13 @@ function data()
 		padding = { 8, 12, 12, 12 },
 		minSize = { 200, -1 },
 	})
-	-- Its buttons in the theme's blue, so they stand out (user, 2026-11-15): AccentMedium with the
-	-- game's hover and pressed shades, as the game bar's checked buttons
-	-- (::/gui/game_bar/game_bar.css.lua).
+	-- Its buttons in the theme's blue, so a lone button stands out (user, 2026-11-15): AccentMedium,
+	-- the game's selected toggle buttons' colour (builtin.css.lua), with its hover and pressed
+	-- shades. Only this class: with imsvale-setting-button as well, that rule (later in this file,
+	-- BaseMedium) won, and the buttons showed no background until hovered (priority road 86).
 	a("Button!imsvale-uninstall-button", {
 		margin = { 8, 0, 0, 0 },
+		padding = { 6, 12, 6, 12 },
 		backgroundColor1 = colorDefault.AccentMedium,
 	})
 	a("Button!imsvale-uninstall-button:hover", {
@@ -42,6 +44,33 @@ function data()
 	})
 	a("Button!imsvale-uninstall-button:active", {
 		backgroundColor1 = color_util.getActiveFromRaw(colorDefault.AccentMedium),
+	})
+	-- The Uninstall button's window (UninstallButtonWindow, priority road 87): frameless (its
+	-- surface, contour and shadow transparent, the title bar hidden, as Ruler's pop-up buttons),
+	-- right under the construction menu's Settings window. That one is placed by gravity { 1, 1 }
+	-- and margin { 50, 20, 360, 0 }, its bottom edge 360 px above the screen's bottom
+	-- (Window!construct-settings, ::/gui/construction/construction.css.lua); this one the same way,
+	-- its height fixed (40) so a bottom margin of 360 - 40 puts its top at that edge. As wide as the
+	-- Settings window (400). Stylesheet sizes scale with the UI scale, so both move together.
+	a("Window!imsvale-uninstall-proxy", {
+		gravity = { 1.0, 1.0 },
+		anchorPoint = { 1.0, 1.0 },
+		margin = { 0, 20, 320, 0 },
+		minSize = { 400, 40 },
+		maxSize = { 400, 40 },
+		backgroundColor1 = { 0, 0, 0, 0 },
+		borderColor = { 0, 0, 0, 0 },
+		shadowColor = { 0, 0, 0, 0 },
+	})
+	a("Window!imsvale-uninstall-proxy Window::TitleBar", {
+		visibility = "none",
+	})
+	a("Window!imsvale-uninstall-proxy Window::Content", {
+		padding = { 4, 0, 0, 0 },
+	})
+	a("Button!imsvale-uninstall-proxy-button", {
+		margin = { 0, 0, 0, 0 },
+		minSize = { 400, -1 },
 	})
 	a("TextView!imsvale-uninstall-section", {
 		margin = { 12, 0, 0, 0 },
