@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 96 (Overwrite lanes ticked by default)"
+local VERSION = "priority road 97 (menu preview image)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2882,7 +2882,9 @@ local function getDefinition(constructionDefinition, _repository, _params)
 	return {
 		resName = constructionDefinition,
 		icon = { icon = "imsvale_road_priority_yield::/gui/priority-triple.tga" },
-		previewIcon = { icon = "imsvale_road_priority_yield::/gui/priority-triple.tga" },
+		-- 720 x 405 as road-priority_preview@2x.tga, named without the @2x (drawn at half size, as the
+		-- game's own previews)
+		previewIcon = { icon = "imsvale_road_priority_yield::/gui/road-priority_preview.tga" },
 		name = "Priority Road",
 		description = "Side roads yield to the road or roundabout you click.",
 		action = "ACTION_CUSTOM",
