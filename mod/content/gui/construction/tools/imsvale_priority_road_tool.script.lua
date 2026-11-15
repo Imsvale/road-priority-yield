@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 106 (no tooltip on a road without junctions)"
+local VERSION = "priority road 107 (tooltip: the action and its junction count)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2781,8 +2781,14 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 		-- Tooltip: kept to a word or a short reason; the highlights and icons show the rest.
 		local text, good = nil, nil
+		-- The action the click takes and on how many junctions (user, 2026-11-15: "Priority road"
+		-- named a road that wasn't one yet). The same counts as the click's log line.
 		if plan then
-			text, good = plan.kind, true
+			local n = plan.remove and plan.ours or plan.entries
+			if n and n > 0 then
+				text = string.format("%s %d junction%s", plan.remove and "Remove from" or "Apply to", n, n == 1 and "" or "s")
+				good = true
+			end
 		elseif seg and why then
 			text, good = why, false
 		end
