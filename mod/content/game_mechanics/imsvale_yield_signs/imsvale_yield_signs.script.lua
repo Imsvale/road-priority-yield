@@ -545,9 +545,15 @@ local function handleEvent(_userParams, state, _src, id, name, param)
 		if param.remove then
 			s.junctions[key] = nil
 		else
+			-- `ahead` (watchAhead's next junctions) carries over a re-registration, a repair's included:
+			-- a junction joined right next to ours replaces our priority segment, the repair
+			-- re-registered ours, and the watch then took the new junction for the normal next one
+			-- and never made it yield (2026-11-15, 974 beside 960).
+			local was = s.junctions[key]
 			s.junctions[key] = { a = param.a, b = param.b, round = param.round or false, typeId = param.typeId, fp = param.fp,
 				settings = type(param.settings) == "table" and param.settings or nil,
-				ph = type(param.ph) == "table" and param.ph or nil }
+				ph = type(param.ph) == "table" and param.ph or nil,
+				ahead = type(was) == "table" and type(was.ahead) == "table" and was.ahead or nil }
 		end
 	elseif kind == "signCheck" and param.node ~= nil then
 		-- the tool has checked the signs around this junction

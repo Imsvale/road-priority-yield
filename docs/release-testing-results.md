@@ -155,3 +155,37 @@ is a different test (a section of its own, still to do).
   lanes. Retested: pass. Tram tracks connect every way at a junction anyway, so leaving them alone
   is the right method (user).
 - §4 done: a-d pass.
+
+## 5. Highway ramps (2026-11-15, priority road 94)
+
+- The tool treats a highway on-ramp's merge as a junction it can apply. By design: the tool doesn't
+  refuse it, though it's not advisable on a highway.
+- **On-ramp with priority, highway yielding:** yield signs on both sides of the highway (it's
+  one-way). They stand about 5 m out from the white line: the clearance past the curb is the same
+  small one as on streets, but the curb is the edge of the outermost non-pedestrian lane, and a
+  highway's wide shoulder counts. Not worth fixing for a use that isn't advisable (user).
+- **Highway with priority, on-ramp yielding:** the on-ramp's yield signs are aligned with the
+  highway, not the ramp. Noted, not worth fixing unless this becomes a legitimate use (user).
+- **A T junction on a highway:** far down the list (user).
+
+## 6. A rail level crossing next to a junction (2026-11-15, priority road 94)
+
+- **6.1-6.2:** pass.
+- **6.3:** priority signs land on the tracks if the rail is built where the signs go (or the signs
+  would go where the rail is). Expected: the tool has no awareness of tracks (no obstacle check;
+  refused signs are built with `ignoreErrors`).
+
+## 7. Junctions very close together (2026-11-15, priority road 94-95)
+
+- **7.1, a second junction joined right next to an applied one** (log before line 5131): road
+  applied with junction 960, then 974 built beside it: no yield signs at 974. Building 974 replaced
+  960's priority segment ("965 replaced by 979"), the repair re-registered 960 as a fresh entry,
+  and the dev-only watch (`watchAhead`, 71) lost its memory of the next junction with it: its first
+  look came after 974 existed, so it took 974 for the normal next junction. With more time between
+  the two (974 found while the watch still remembered), both got yield signs. Fixed in 95: the
+  watch's memory (`ahead`) carries over a re-registration. Dev builds only; a release leaves new
+  junctions to the player. The priority signs were right: redone around 974, none between the two
+  (the stretch is under 60 m). "signs 972/973: removal refused": the repair and the sign check both
+  removing the same old signs; harmless.
+- **7.2:** with more time between: pass, yield signs at both, no priority sign between them.
+- **7.3:** to do: as 7.1 with one of the two a T (traffic queuing from one into the other).
