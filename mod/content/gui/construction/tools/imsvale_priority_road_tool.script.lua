@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 79 (roundabout lanes mirrored for left-hand traffic)"
+local VERSION = "priority road 80 (one-way roads: signs only for traffic that drives there, on both sides)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -957,6 +957,40 @@ local function isPedestrian(lc)
 	return found
 end
 
+-- Which ways a segment's vehicle lanes run: forward (node0 to node1), backward. Lanes without
+-- transport modes (a highway's shoulders) and pedestrian lanes don't count. LaneConfig.forward is
+-- relative to the segment (script-doc type.md); a left-hand traffic mod that swaps a two-way
+-- street's lane directions leaves it two-way, a one-way street one-way.
+local function laneDirs(seg)
+	local fwd, back = false, false
+	local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+	for _, lc in ipairs(e and e.laneConfigs or {}) do
+		local vehicle = false
+		if not isPedestrian(lc) then
+			pcall(function()
+				for _, v in pairs(lc.transportModes) do
+					if v and v ~= 0 then vehicle = true end
+				end
+			end)
+		end
+		if vehicle then
+			if lc.forward then fwd = true else back = true end
+		end
+	end
+	return fwd, back
+end
+
+-- Whether traffic drives along `seg` away from `node`; and whether it's one-way (only that way).
+local function drivesFrom(seg, node)
+	local fwd, back = laneDirs(seg)
+	local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+	local away, toward = fwd, back
+	if e and e.node1 == node then away, toward = back, fwd end
+	-- no vehicle lanes read (unexpected): treat as two-way, as before
+	if not fwd and not back then return true, false end
+	return away, away and not toward
+end
+
 -- How far from the road's centre line the curb is: the outer edge of the outermost lane that
 -- isn't for pedestrians (driving lanes, and shoulders without transport modes, as on highways),
 -- and whether a raised sidewalk lies beyond it. Assumes the road is symmetric about its centre.
@@ -1132,6 +1166,19 @@ local function placeSigns(node, segs, style, round, done)
 	for _, seg in ipairs(segs) do
 		local t = signTransf(seg, node, left)
 		if t then transfs[#transfs + 1] = t end
+		-- A one-way approach (all its traffic coming in): a sign on the other side too, as on
+		-- one-way priority stretches (user, 2026-11-15).
+		local okDir, drivesOut = pcall(drivesFrom, seg, node)
+		local okIn, drivesIn, oneWayIn = false, false, false
+		if okDir and not drivesOut then
+			local e = api.engine.getComponent(seg, CT.BASE_EDGE)
+			local far = e and (e.node0 == node and e.node1 or e.node0)
+			if far then okIn, drivesIn, oneWayIn = pcall(drivesFrom, seg, far) end
+		end
+		if okIn and drivesIn and oneWayIn then
+			local t2 = signTransf(seg, node, not left)
+			if t2 then transfs[#transfs + 1] = t2 end
+		end
 	end
 	placeAt(transfs, file, "Yield sign", "node " .. node, done)
 end
@@ -1424,12 +1471,18 @@ local function diamondPlaces(plan)
 		if dir > 0 then return segs[i] end
 		return segs[i - 1] or segs[#segs]
 	end
+	-- Only for traffic that actually drives that way (one-way roads, each carriageway of a dual
+	-- carriageway; 2026-11-15: signs stood against the traffic), and on a one-way stretch on both
+	-- sides of the road (user).
 	local function add(i, s, dir)
 		if loop then s = s % L end
 		if s > 0 and s < L then
-			local key = nodes[i] .. ":" .. segFrom(i, dir)
+			local seg = segFrom(i, dir)
+			local okDir, drives, oneWay = pcall(drivesFrom, seg, nodes[i])
+			if okDir and not drives then return end
+			local key = nodes[i] .. ":" .. seg
 			places[key] = places[key] or {}
-			table.insert(places[key], { s = s, dir = dir })
+			table.insert(places[key], { s = s, dir = dir, bothSides = okDir and oneWay })
 		end
 	end
 	local keys = {}
@@ -1479,11 +1532,13 @@ local function updateDiamonds(plan)
 	for key, list in pairs(places) do
 		local transfs, parts = {}, {}
 		for _, place in ipairs(list) do
-			local t = diamondTransf(pts, place.s, place.dir, left)
 			local p = pointAt(pts, place.s)
-			if t and p then
-				transfs[#transfs + 1] = t
-				parts[#parts + 1] = string.format("%.1f,%.1f,%d%s", p.x, p.y, place.dir, left and "L" or "")
+			for _, side in ipairs(place.bothSides and { left, not left } or { left }) do
+				local t = diamondTransf(pts, place.s, place.dir, side)
+				if t and p then
+					transfs[#transfs + 1] = t
+					parts[#parts + 1] = string.format("%.1f,%.1f,%d%s", p.x, p.y, place.dir, side and "L" or "")
+				end
 			end
 		end
 		table.sort(parts)

@@ -314,13 +314,23 @@ local function watchAhead(s, node, j, adopt)
 		local was = j.ahead[field]
 		if not next_ then
 			j.ahead[field] = nil
-		elseif not was or was.seg ~= seg or next_ == was.node then
-			j.ahead[field] = { seg = seg, node = next_ } -- first look, or a new priority segment
+		elseif not was or next_ == was.node then
+			-- first look, or the same next junction (also over a new priority segment: a road joined
+			-- right next to this junction replaces it, and the junction it made must still be seen,
+			-- 2026-11-15)
+			j.ahead[field] = { seg = seg, node = next_ }
 		elseif not s.junctions[tostring(next_)] and not adopt[next_]
 			and #items(api.engine.system.streetSystem.getNodeStreetSegments(next_)) >= 3 then
 			local on = straightOn(arriving, next_)
 			local beyond = on and nextJunction(on, next_)
-			if beyond == was.node then
+			-- a side road leading in: one that can yield (a road only leading away can't: left to
+			-- the game, its own light where it calls for one)
+			local sideIn = false
+			local cfg = api.engine.getComponent(next_, CT.BASE_NODE_CONFIG)
+			for _, c in ipairs(items(cfg and cfg.laneConnections)) do
+				if c.segment0 ~= arriving and c.segment0 ~= on then sideIn = true end
+			end
+			if beyond == was.node and sideIn then
 				log("new junction %d on the priority road between %d and %d: marked repair", next_, node, was.node)
 				adopt[next_] = { a = arriving, b = on, round = j.round, typeId = j.typeId, settings = j.settings,
 					repair = true }
