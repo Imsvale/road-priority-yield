@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 98 (Shift: one junction at a time)"
+local VERSION = "priority road 99 (hovering a junction picks it)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1786,6 +1786,50 @@ local function shiftTarget(seg)
 	return best
 end
 
+-- A junction's node (3+ roads), which the tool's Selector also picks (priority road 99, user
+-- 2026-11-15: hovering the junction itself, which is what gets the priority, did nothing).
+local function isJunctionNode(e)
+	return e ~= nil and e >= 0 and api.engine.entityExists(e) and api.engine.getComponent(e, CT.BASE_NODE) ~= nil
+		and #api.engine.system.streetSystem.getNodeStreetSegments(e) >= 3
+end
+
+-- The junction's road nearest the mouse (by where each arm meets the junction), so hovering a
+-- junction picks the road through it as hovering that arm would.
+local function nearestArm(node)
+	local arms = {}
+	for _, seg in ipairs(api.engine.system.streetSystem.getNodeStreetSegments(node)) do arms[#arms + 1] = seg end
+	if #arms == 0 then return nil end
+	if not api.gui.mouse.hasTerrainPosition() then return arms[1] end
+	local m = api.gui.mouse.getTerrainPosition()
+	local best, bestD = arms[1], math.huge
+	for _, seg in ipairs(arms) do
+		local p = approachPoint(seg, node)
+		if p then
+			local d = (p.x - m.x) ^ 2 + (p.y - m.y) ^ 2
+			if d < bestD then best, bestD = seg, d end
+		end
+	end
+	return best
+end
+
+-- What the tool acts on for a picked entity: the road segment, and with Shift held the junction
+-- (nil without Shift, false with no junction). A segment: itself, and its link end nearest the
+-- mouse. A junction node: its arm nearest the mouse, and the junction itself.
+local function resolveTarget(entity)
+	local shift = shiftHeld()
+	if isEdge(entity) then
+		if not shift then return entity, nil end
+		local ok, r = pcall(shiftTarget, entity)
+		return entity, ok and r or false
+	end
+	if isJunctionNode(entity) then
+		local ok, arm = pcall(nearestArm, entity)
+		if not ok or not arm then return nil, nil end
+		return arm, shift and entity or nil
+	end
+	return nil, nil
+end
+
 -- The road plan cut down to one junction (`node`): removed if it's ours, applied otherwise. Its own
 -- icons, lines over its two priority arms (and its yielding arms when applying).
 local function singlePlan(p, node)
@@ -2475,18 +2519,17 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	end
 
 	local function actionFn()
+		-- The picked entity (a road segment or a junction node), and what it resolves to
+		-- (resolveTarget): followed every step, since the mouse moves within a segment or around a
+		-- junction, and Shift comes and goes; redrawn only when that changes.
 		local hovered = react.useState(nil)
-		-- Shift: the junction the click acts on (nil without Shift, false with no junction; see
-		-- shiftTarget), followed every step since the mouse moves within a segment.
-		local target = react.useState(nil)
+		local resolved = react.useState({ key = "" })
 		react.onStep(function()
-			local s = hovered:old()
-			local t = nil
-			if s and shiftHeld() and isEdge(s) then
-				local ok, r = pcall(shiftTarget, s)
-				t = ok and r or false
-			end
-			if t ~= target:old() then target:set(t) end
+			local e = hovered:old()
+			local s, t = nil, nil
+			if e then s, t = resolveTarget(e) end
+			local key = tostring(s) .. ":" .. tostring(t)
+			if key ~= resolved:old().key then resolved:set({ key = key, seg = s, target = t }) end
 		end)
 
 		-- The plan for a hovered segment: the road, or with Shift one junction.
@@ -2498,9 +2541,9 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			return singlePlan(p, t)
 		end
 
-		local seg = hovered:old()
+		local seg = resolved:old().seg
 		local plan, why = nil, nil
-		if seg and not pending:old() then plan, why = planFor(seg, target:old()) end
+		if seg and not pending:old() then plan, why = planFor(seg, resolved:old().target) end
 		if plan then
 			local line = string.format("%s from segment %d: %d segments, %d junctions (%d yield, %d skipped, %d applied)%s",
 				plan.kind, seg, #plan.segs, #plan.junctions, plan.entries, plan.skipped, plan.applied,
@@ -2556,16 +2599,14 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			selectionOutlineColor = none,
 			selectionOutlineColor1 = none,
 			onHover = function(entity)
-				local s = isEdge(entity) and entity or nil
-				if s ~= hovered:old() then hovered:set(s) end
+				local e = (isEdge(entity) or isJunctionNode(entity)) and entity or nil
+				if e ~= hovered:old() then hovered:set(e) end
 			end,
 			onSelect = function(entity)
 				if pending:old() then return true end
-				local t = nil
-				if shiftHeld() then
-					local okT, r = pcall(shiftTarget, entity)
-					t = okT and r or false
-				end
+				local picked = entity
+				local entity, t = resolveTarget(picked)
+				if not entity then return true end
 				local p, w = planFor(entity, t)
 				if not p then
 					message:set(tostring(w))
@@ -2604,7 +2645,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				return true
 			end,
 			filter = function(entity)
-				return isEdge(entity)
+				return isEdge(entity) or isJunctionNode(entity)
 			end,
 		}
 
