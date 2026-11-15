@@ -143,3 +143,14 @@ is a different test (a section of its own, still to do).
     uses lane ends within 10 m of the nearest one (`END_SPREAD`). **Retest c:** upgrade the roads
     to bus lanes one after another, then check 669's yielding, its yield signs' positions, and the
     start signs.
+  - Retested (2026-11-15): Uninstall, then the road down to 2 lanes with tram tracks, applied, and
+    up again to 4 lanes with bus lanes keeping the tracks: signs in the right places, 669 kept
+    yielding. Pass, within the mod's limits.
+- **d. A side road's right turn without its tram track** ("Overwrite lanes" on, line 2643): the
+  junction rule maps each turn onto its own lane; at 669 the side road's right turn fanned into
+  both outbound lanes (`351:1>378:3`, `351:1>378:4`) and kept only the curb lane (`>378:4`). The
+  tram runs on the lane inside the bus lane (lane 3), so its track went. A tram track through a
+  junction exists only along a connection the tram uses (`LaneConnection.withTram`). Fixed in 85:
+  the lane rules leave tram connections as they are; a roundabout with tram tracks keeps its
+  lanes. **Retest d** (remove and apply again with "Overwrite lanes" on; the trace marks tram
+  connections with a `t`).

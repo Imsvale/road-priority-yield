@@ -20,6 +20,7 @@ At each junction on a priority road:
     - entry lanes take blocks of ring lanes curb first, with the leftmost entry lanes getting the extra ones.
     - A one-lane ring exits and goes on; a junction without an exit keeps lane to lane. Ring junctions with two side roads at one node are left alone.
     - "Dedicated turn lanes" doesn't apply.
+  - **Tram tracks** (priority road 85, 2026-11-15): a connection a tram uses (`LaneConnection.withTram`, `isTram`) is the track through the junction, so the junction rule leaves it as it is (only road connections are remapped; "Dedicated turn lanes" never drops one), and the roundabout rule, which builds connections from scratch, leaves a roundabout with tram tracks alone. Before, a side road's right turn lost its track: the rule kept only the curb lane, the tram being on the lane inside a bus lane (junction 669). `traceLanes` marks tram connections with a `t`.
 
 Measured in the lab (paired runs on a roundabout): stopping on the ring −96%, all stopping −33%, throughput +2%, and the ring never broke down.
 

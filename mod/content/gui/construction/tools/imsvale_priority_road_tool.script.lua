@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 84 (repairs not stuck after repeated edits; stale priority signs cleared; junction edge ignores far lane pieces)"
+local VERSION = "priority road 85 (lane rules leave tram connections as they are)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -563,10 +563,20 @@ local function turnKind(node, a, b)
 	return angle > 0 and "left" or "right"
 end
 
+-- A connection a tram uses (LaneConnection.withTram): the tram track through the junction is
+-- drawn and driven along it, so the lane rules leave it exactly as it is (2026-11-15: a side
+-- road's right turn lost its tram track when the rule kept only the curb lane, the tram being on
+-- the lane inside a bus lane).
+local function isTram(c)
+	local tram = false
+	pcall(function() tram = c.withTram == true end)
+	return tram
+end
+
 local function rewriteLanes(node, cfg, dedicated)
 	local old = cfg.laneConnections -- copies
 	local kinds = {}
-	for i, c in ipairs(old) do kinds[i] = turnKind(node, c.segment0, c.segment1) end
+	for i, c in ipairs(old) do kinds[i] = isTram(c) and "tram" or turnKind(node, c.segment0, c.segment1) end
 	local outLanes = {}
 	for _, c in ipairs(old) do
 		outLanes[c.segment1] = outLanes[c.segment1] or {}
@@ -626,7 +636,7 @@ local function rewriteLanes(node, cfg, dedicated)
 		end
 		local kept = {}
 		for _, c in ipairs(new) do
-			local drop = keepOne[c.segment0] and turns[c.segment0 .. ":" .. c.lane0]
+			local drop = keepOne[c.segment0] and turns[c.segment0 .. ":" .. c.lane0] and not isTram(c)
 				and turnKind(node, c.segment0, c.segment1) == "straight"
 			if not drop then kept[#kept + 1] = c end
 		end
@@ -659,6 +669,11 @@ end
 -- lanes (2026-11-12: before, left-hand traffic exited from the inner lane).
 local function roundaboutLanes(node, cfg, a, b, exitStyle, left)
 	local old = cfg.laneConnections -- copies
+	-- Tram tracks: this rule builds the connections from scratch, so it would lose them; such a
+	-- roundabout keeps its lanes (see isTram).
+	for _, c in ipairs(old) do
+		if isTram(c) then return nil end
+	end
 	local ringIn, ringOut
 	for _, c in ipairs(old) do
 		if c.segment0 == a and c.segment1 == b then ringIn, ringOut = a, b end
@@ -1070,7 +1085,7 @@ traceLanes = function(node, kind, cfg, conns, states)
 	local function list(cs)
 		local parts = {}
 		for _, c in ipairs(cs) do
-			parts[#parts + 1] = c.segment0 .. ":" .. c.lane0 .. ">" .. c.segment1 .. ":" .. c.lane1
+			parts[#parts + 1] = c.segment0 .. ":" .. c.lane0 .. ">" .. c.segment1 .. ":" .. c.lane1 .. (isTram(c) and "t" or "")
 		end
 		return #cs .. ": " .. table.concat(parts, " ")
 	end
