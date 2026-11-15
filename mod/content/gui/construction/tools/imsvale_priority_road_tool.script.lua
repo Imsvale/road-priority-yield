@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 91 (Uninstall button in the tool's overlay, not a window: Back works again)"
+local VERSION = "priority road 92 (Uninstall button placement logged)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1858,18 +1858,27 @@ local toggleUninstall -- (): opens or closes the Uninstall window; defined with 
 -- wide; scaled by the UI scale, read from its actual width against those 400.
 local SETTINGS_WINDOW_ID = "menu.construction.params.react"
 local UNINSTALL_GAP = 4 -- pixels (at UI scale 1) between the Settings window and the Uninstall button
+local cornerLogged = nil -- what settingsCorner last logged (GUI module state; a test aid)
 local function settingsCorner()
-	local visible = false
-	pcall(function() visible = api.gui.byId.isVisible(SETTINGS_WINDOW_ID) end)
-	if not visible then return nil end
+	local visible, okVis = false, false
+	okVis = pcall(function() visible = api.gui.byId.isVisible(SETTINGS_WINDOW_ID) end)
 	local size = api.gui.camera.getSize()
 	local w, h = math.max(size.x, 1), math.max(size.y, 1)
-	local scale = 1
+	local scale, sx, sy = 1, nil, nil
 	pcall(function()
 		local s = api.gui.byId.getSize(SETTINGS_WINDOW_ID)
+		sx, sy = s and s.x, s and s.y
 		if s and s.x > 0 then scale = s.x / 400 end
 	end)
-	return (w - 20 * scale) / w, (h - 360 * scale + UNINSTALL_GAP * scale) / h
+	local cx, cy = (w - 20 * scale) / w, (h - 360 * scale + UNINSTALL_GAP * scale) / h
+	local line = string.format("uninstall button: settings visible %s (%s), size %s x %s, screen %d x %d -> %.3f, %.3f",
+		tostring(visible), okVis and "read" or "failed", tostring(sx), tostring(sy), w, h, cx, cy)
+	if line ~= cornerLogged then
+		cornerLogged = line
+		log("%s", line)
+	end
+	if not visible then return nil end
+	return cx, cy
 end
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
 	react.setMouseTransparent(true)
