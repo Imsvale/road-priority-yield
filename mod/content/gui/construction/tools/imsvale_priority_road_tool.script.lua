@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 95 (dev watch keeps its next junctions over a repair)"
+local VERSION = "priority road 96 (Overwrite lanes ticked by default)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -880,8 +880,11 @@ end
 -- it while the tool is open restyles every junction's signs (restyleAll).
 local SIGN_STYLE_PARAM = "imsvaleSignStyle"
 -- Lane settings (see the header): checkboxes (a Yes / No setting is most compact as a checkbox,
--- user 2026-10-19), unticked by default: read 1 = unticked, 2 = ticked. Opt-in (user,
--- 2026-10-19): a player who doesn't look at the settings never loses their own lane work.
+-- user 2026-10-19): read 1 = unticked, 2 = ticked. "Overwrite lanes" is ticked by default since
+-- priority road 96 (user, 2026-11-15): a new player applies the tool without looking at its
+-- settings, and with the game's lanes the yielding doesn't have the effect they expect; players
+-- who care about their own lanes untick it. (Until 95 it was opt-in, so as never to lose a
+-- player's lane work.) "Dedicated turn lanes" stays unticked by default.
 local LANE_PARAM = "imsvaleOverwriteLanes"
 local DEDICATED_PARAM = "imsvaleDedicatedTurnLanes"
 -- "Uninstall" (priority road 48, 2026-10-20): a window counts what the mod has placed in the save
@@ -2329,7 +2332,8 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	local function laneSettings()
 		local cur = {}
 		pcall(function() cur = panel(params) end)
-		return { overwrite = cur[LANE_PARAM] == 2, dedicated = cur[DEDICATED_PARAM] == 2,
+		-- (a value not seen yet, after a UI reload, counts as the default: ticked for overwrite)
+		return { overwrite = cur[LANE_PARAM] ~= 1, dedicated = cur[DEDICATED_PARAM] == 2,
 			exitStyle = cur[EXIT_PARAM] == 2 and "B" or "A" }
 	end
 
@@ -2923,7 +2927,7 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				key = LANE_PARAM,
 				name = "Overwrite lanes",
 				values = { "Yes" },
-				defaultIndex = 1,
+				defaultIndex = 2, -- ticked
 				resetOnCategoryChange = false,
 				uiType = api.type.enum.ScriptParamType.CheckBox,
 				yearFrom = 0,
