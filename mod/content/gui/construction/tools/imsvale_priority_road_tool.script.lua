@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 82 (priority signs redone around a new junction on a priority road)"
+local VERSION = "priority road 83 (sign redo around a new junction: start signs at the applied road's ends, each key once)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1528,13 +1528,21 @@ local function diamondPlaces(plan)
 		local fromLast = endS - (lastJ and lastJ.sOut or startS)
 		add(#nodes, endS - from(fromLast, nodes[#nodes]), -1)
 	end
+	-- membersOnly: a junction where the applied road's links stop on one side is that road's end
+	-- there, so the sign into it is a start sign, placed always, not a repeat held to minGap
+	-- (2026-11-15: signs at a bend that became a junction were lost on short stretches).
+	local members = plan.membersOnly and plan.members or nil
+	local function memberSeg(seg) return members == nil or (seg ~= nil and members[seg] == true) end
 	for k, j in ipairs(js) do
+		local segAhead, segBehind = segs[j.i], segs[j.i - 1] or segs[#segs]
+		local startAhead = members and memberSeg(segAhead) and not memberSeg(segBehind)
+		local startBehind = members and memberSeg(segBehind) and not memberSeg(segAhead)
 		local nextIn = js[k + 1] and js[k + 1].sIn or (loop and js[1].sIn + L) or endS
 		local ahead = nextIn - j.sOut
-		if ahead >= cfg.minGap then add(j.i, j.sOut + from(ahead, j.node), 1) end
+		if ahead >= cfg.minGap or startAhead then add(j.i, j.sOut + from(ahead, j.node), 1) end
 		local prevOut = js[k - 1] and js[k - 1].sOut or (loop and js[#js].sOut - L) or startS
 		local behind = j.sIn - prevOut
-		if behind >= cfg.minGap then add(j.i, j.sIn - from(behind, j.node), -1) end
+		if behind >= cfg.minGap or startBehind then add(j.i, j.sIn - from(behind, j.node), -1) end
 	end
 	return places, pts, nodes, keys
 end
@@ -1601,10 +1609,15 @@ local function updateDiamonds(plan)
 		for _, key in ipairs(keys) do clear[#clear + 1] = key end
 		for _, node in ipairs(nodes) do clear[#clear + 1] = tostring(node) end
 	end
+	-- plan.handled: keys an earlier road in the same round already removed or placed (roads that
+	-- share stretches, around a new junction): the stored records aren't updated yet, so a second
+	-- road would remove the same signs again or place a second sign under the same key, leaving the
+	-- first unrecorded (2026-11-15). Each key is touched once, by the first road.
+	local handled = plan.handled or {}
 	local removed = 0
 	for _, key in ipairs(clear) do
 		local old = stored[key]
-		if not keep[key] and type(old) == "table" and #old > 0 then
+		if not keep[key] and not handled[key] and type(old) == "table" and #old > 0 then
 			removeSigns(old)
 			storeDiamonds(key, {})
 			stored[key] = nil
@@ -1614,7 +1627,9 @@ local function updateDiamonds(plan)
 	if plan.remove then return end
 	local count, kept = 0, 0
 	for key, w in pairs(wanted) do
-		if keep[key] then
+		if handled[key] then
+			-- left to the road that came first
+		elseif keep[key] then
 			kept = kept + #w.transfs
 		else
 			count = count + #w.transfs
@@ -1622,6 +1637,10 @@ local function updateDiamonds(plan)
 				storeDiamonds(key, ids, w.sig)
 			end)
 		end
+	end
+	if plan.handled then
+		for _, key in ipairs(clear) do plan.handled[key] = true end
+		for key in pairs(wanted) do plan.handled[key] = true end
 	end
 	log("priority signs: %d placed, %d kept, %d removed", count, kept, removed)
 end
@@ -2539,16 +2558,18 @@ local function drop(node, why, typeId, roadEnds, segs)
 end
 
 -- Priority signs for the given roads ({ seg, diamonds = the sign settings it was applied with }),
--- each road once.
+-- each road once, each sign key once (`handled`, see updateDiamonds). membersOnly: see
+-- updateDiamonds; a road with none of the applied road's links is then skipped.
 local function redoRoadDiamonds(roads, membersOnly)
-	local done = {}
+	local done, handled = {}, {}
 	for _, r in ipairs(roads) do
 		if not done[r.seg] and isEdge(r.seg) then
 			local ok, plan = pcall(planFrom, r.seg)
-			if ok and plan and not plan.round then
+			if ok and plan and not plan.round and not (membersOnly and next(plan.members or {}) == nil) then
 				for _, x in ipairs(plan.segs) do done[x] = true end
 				plan.remove = false
 				plan.membersOnly = membersOnly
+				plan.handled = handled
 				local saved = panelDiamonds
 				if type(r.diamonds) == "table" then panelDiamonds = r.diamonds end
 				local dOk, err = pcall(updateDiamonds, plan)

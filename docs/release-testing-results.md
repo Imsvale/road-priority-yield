@@ -88,8 +88,21 @@ is a different test (a section of its own, still to do).
     too close to the junction on either side, then reapply signs as per existing rules"). After the
     player's build, a new junction on a road with our priority signs gets those roads' signs redone:
     the ones near it move, the rest are kept; only on the applied road's own links. Event-driven;
-    doesn't cover towns. **Retest** with the 2b setup: the sign at the bend should move out of the
-    junction.
+    doesn't cover towns. Tested on four 2b setups (log from line 646, after a restart):
+    1. no side road: signs as expected;
+    2. junction 684: the signs near the bend went and none came back. The bend's start sign became
+       a repeat sign, and repeats need 60 m between junction edges (`DIAMOND_MIN_GAP`, the
+       "Minimum segment length" setting); the stretches were shorter. But the new junction is where
+       the applied road now ends, so a start sign (placed always) belongs there. Also "signs 677:
+       removal refused": two roads run through 684, both were redone, and the second removed the
+       same signs again from a stale record.
+    3. junction 543 (an extra junction after the bend first): as 2. Its yield sign came from the
+       dev-only watch (71).
+    4. long segments, junction 285: signs moved as expected; yield sign from the dev-only watch.
+       But "285:718" was placed twice, by both roads: one sign was left unrecorded (the mod can't
+       remove it; bulldoze it by hand).
+    Fixed in 83: start signs at the applied road's ends in this redo, and each sign key handled
+    once per redo. **Retest** setups 2 and 4.
   - **The bend:** log the turn angle where the walk stops (a dev trace), to see whether 41° on the
     ground measures over 45° at the node, and whether `MAX_TURN` should be larger or measured
     further from the node.
