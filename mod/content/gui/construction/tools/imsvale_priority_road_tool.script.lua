@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 101 (log why no junction counts as on screen)"
+local VERSION = "priority road 102 (on screen: apply where nothing in view would be removed; lines over the part taken)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1821,13 +1821,28 @@ end
 
 local lastScreenLog = nil -- the last screenPlan diagnostic logged (GUI module state)
 -- The road plan cut down to the junctions on screen (the default: without Ctrl). Roundabouts stay
--- whole: a ring is one thing. Lines over the road's segments with a node on screen; icons for the
--- junctions kept.
+-- whole: a ring is one thing. Icons for the junctions kept; lines over the road from the first to
+-- the last of them, and the segment beyond each end (its arms), not every segment in view: on a
+-- long road those ran to the next junction, far beyond what the click touches (2026-11-15).
+-- Removing only when something on screen would be removed: hovering a road that belongs (its far
+-- end is one of our junctions) where none of the junctions the removal reaches is in view, e.g.
+-- in the next town along it, applies to the junctions in view instead (user, 2026-11-15: it said
+-- "No junction on screen" there).
 local function screenPlan(p)
 	if p.round then return p end
+	local remove = p.remove
 	local kept = {}
-	for _, j in ipairs(p.junctions) do
-		if (not p.remove or j.removeHere) and onScreen(j.node) then kept[#kept + 1] = j end
+	if remove then
+		for _, j in ipairs(p.junctions) do
+			if j.removeHere and onScreen(j.node) then kept[#kept + 1] = j end
+		end
+		if #kept == 0 then remove = false end
+	end
+	if not remove then
+		for _, j in ipairs(p.junctions) do
+			j.removeHere = false
+			if onScreen(j.node) then kept[#kept + 1] = j end
+		end
 	end
 	if #kept == 0 then
 		-- what was decided, per junction (a test aid: the message showed with junctions in view)
@@ -1840,11 +1855,9 @@ local function screenPlan(p)
 				local v = api.gui.camera.world2Screen(api.type.Vec3f.new(q.x, q.y, q.z))
 				where = string.format("%d,%d", v.x, v.y)
 			end)
-			parts[#parts + 1] = string.format("%d at %s on screen %s%s", j.node, where, tostring(onScreen(j.node)),
-				p.remove and (j.removeHere and " (removed here)" or " (not in the stretch)") or "")
+			parts[#parts + 1] = string.format("%d at %s on screen %s", j.node, where, tostring(onScreen(j.node)))
 		end
-		local line = string.format("none on screen (%s, screen %d x %d): %s", p.remove and "removing" or "applying",
-			size.x, size.y, table.concat(parts, "; "))
+		local line = string.format("none on screen (screen %d x %d): %s", size.x, size.y, table.concat(parts, "; "))
 		if line ~= lastScreenLog then
 			lastScreenLog = line
 			log("%s", line)
@@ -1852,32 +1865,40 @@ local function screenPlan(p)
 		return nil, "No junction on screen"
 	end
 	local sp = { kind = p.kind, round = p.round, typeId = p.typeId, seg0 = p.seg0, junctions = kept,
-		remove = p.remove, screen = true, ours = 0, entries = 0, applied = 0, skipped = 0,
+		remove = remove, screen = true, ours = 0, entries = 0, applied = 0, skipped = 0,
 		segs = {}, removeSegs = {}, yieldSegs = {}, icons = {}, nodes = {} }
 	for _, j in ipairs(kept) do
 		sp.nodes[j.node] = true
 		if j.has then sp.applied = sp.applied + 1 end
-		if p.remove then
+		if remove then
 			sp.ours = sp.ours + 1
 		elseif j.states then
 			sp.entries = sp.entries + 1
 		else
 			sp.skipped = sp.skipped + 1
 		end
-		for seg, role in pairs(p.remove and j.old or j.new) do
+		for seg, role in pairs(remove and j.old or j.new) do
 			local q = approachPoint(seg, j.node)
 			if q then
-				q.kind, q.cross, q.shift = role, p.remove, 0
+				q.kind, q.cross, q.shift = role, remove, 0
 				sp.icons[#sp.icons + 1] = q
 			end
-			if not p.remove and role == "yield" then sp.yieldSegs[#sp.yieldSegs + 1] = seg end
+			if not remove and role == "yield" then sp.yieldSegs[#sp.yieldSegs + 1] = seg end
 		end
 	end
-	for _, seg in ipairs(p.remove and (p.removeSegs or {}) or p.segs) do
-		local e = api.engine.getComponent(seg, CT.BASE_EDGE)
-		if e and (onScreen(e.node0) or onScreen(e.node1)) then
-			sp.segs[#sp.segs + 1] = seg
-			sp.removeSegs[#sp.removeSegs + 1] = seg
+	-- the lines: along the road from the first kept junction to the last, one segment beyond each
+	local chainSegs, chainNodes = chainOf(p)
+	local lo, hi = nil, nil
+	for i, n in ipairs(chainNodes) do
+		if sp.nodes[n] then
+			lo = lo and math.min(lo, i) or i
+			hi = hi and math.max(hi, i) or i
+		end
+	end
+	if lo then
+		for i = math.max(1, lo - 1), math.min(#chainSegs, hi) do
+			sp.segs[#sp.segs + 1] = chainSegs[i]
+			sp.removeSegs[#sp.removeSegs + 1] = chainSegs[i]
 		end
 	end
 	return sp
