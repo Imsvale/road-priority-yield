@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 88 (Uninstall button: dimmer, label-wide, in the Settings window's corner)"
+local VERSION = "priority road 89 (Back leaves the tool again: the Uninstall button's window passes it on)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2242,6 +2242,12 @@ local UninstallButtonWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUn
 		title = "",
 		closable = false,
 		movable = false,
+		-- Back (Escape, right-click) goes to the window in front through its onClose, even one
+		-- that can't be closed: that's how the Settings window leaves the tool (its onClose fires
+		-- constructionMenuQuit, ConstructionParamsWindow in ::/gui/construction/construction.tl).
+		-- This window is added after it, so in front: without this, Back did nothing while the
+		-- tool was open (2026-11-15).
+		onClose = function() react.fireEvent(nil, "constructionMenuQuit") end,
 		content = builtin.Button{
 			meta = { class = "imsvale-uninstall-proxy-button" },
 			content = builtin.TextView{ text = "Uninstall" },
