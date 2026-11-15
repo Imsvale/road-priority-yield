@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 103 (on screen: only where the hovered segment is in the part taken)"
+local VERSION = "priority road 104 (no tooltip where nothing applies)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1819,7 +1819,6 @@ local function cameraKey()
 	return key
 end
 
-local lastScreenLog = nil -- the last screenPlan diagnostic logged (GUI module state)
 -- The road plan cut down to the junctions on screen (the default: without Ctrl). Roundabouts stay
 -- whole: a ring is one thing. Icons for the junctions kept; lines over the road from the first to
 -- the last of them, and the segment beyond each end (its arms), not every segment in view: on a
@@ -1844,26 +1843,8 @@ local function screenPlan(p)
 			if onScreen(j.node) then kept[#kept + 1] = j end
 		end
 	end
-	if #kept == 0 then
-		-- what was decided, per junction (a test aid: the message showed with junctions in view)
-		local parts = {}
-		local size = api.gui.camera.getSize()
-		for _, j in ipairs(p.junctions) do
-			local where = "?"
-			pcall(function()
-				local q = api.engine.getComponent(j.node, CT.BASE_NODE).position
-				local v = api.gui.camera.world2Screen(api.type.Vec3f.new(q.x, q.y, q.z))
-				where = string.format("%d,%d", v.x, v.y)
-			end)
-			parts[#parts + 1] = string.format("%d at %s on screen %s", j.node, where, tostring(onScreen(j.node)))
-		end
-		local line = string.format("none on screen (screen %d x %d): %s", size.x, size.y, table.concat(parts, "; "))
-		if line ~= lastScreenLog then
-			lastScreenLog = line
-			log("%s", line)
-		end
-		return nil, "No junction on screen"
-	end
+	-- nothing in view: no tooltip either (user, 2026-11-15: not when nowhere near anything)
+	if #kept == 0 then return nil, nil end
 	local sp = { kind = p.kind, round = p.round, typeId = p.typeId, seg0 = p.seg0, junctions = kept,
 		remove = remove, screen = true, ours = 0, entries = 0, applied = 0, skipped = 0,
 		segs = {}, removeSegs = {}, yieldSegs = {}, icons = {}, nodes = {} }
@@ -1978,7 +1959,7 @@ local function singlePlan(p, node)
 			return sp
 		end
 	end
-	return nil, "No junction here"
+	return nil, nil
 end
 
 local lastLog = nil -- plans are worked out on every redraw: log one only when it changes
@@ -2666,7 +2647,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			local ok, p, w = pcall(planFrom, s)
 			if not ok then return nil, "error: " .. tostring(p) end
 			if not p then return p, w end
-			if t == false then return nil, "No junction here" end
+			if t == false then return nil, nil end -- no junction at either end: no tooltip
 			if t ~= nil then return singlePlan(p, t) end
 			if whole then return p, w end
 			return screenPlan(p)
