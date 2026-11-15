@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 85 (lane rules leave tram connections as they are)"
+local VERSION = "priority road 86 (Uninstall window: no close button, blue buttons)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2206,15 +2206,18 @@ local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallConte
 end)
 
 -- The window's state (GUI module state): `wanted` is the checkbox as the action last read it,
--- `dismissed` the window's X (until the box is unticked), `open` whether it's up.
-local uninstall = { wanted = false, dismissed = false, open = false, wc = nil }
+-- `open` whether it's up. (The window had an X until priority road 86, which closed it until the box
+-- was unticked; the box stayed ticked.)
+local uninstall = { wanted = false, open = false, wc = nil }
 
 local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstallWindow", builtin.Window, function(param)
 	return builtin.Window{
-		meta = { class = "imsvale-uninstall" },
+		-- No close button (and no notch in the frame for one): the checkbox is the window's only
+		-- switch, so they can't get out of step. The tool can't untick its own checkbox, and a
+		-- button can't be a panel parameter (../docs/GUI.md) (user, 2026-11-15).
+		meta = { class = "imsvale-uninstall, no-close-button" },
 		title = "Uninstall",
-		closable = true,
-		onClose = function() uninstall.dismissed = true end,
+		closable = false,
 		movable = true,
 		content = UninstallContent{},
 	}
@@ -2238,8 +2241,7 @@ UninstallPresence = react.RegisterRecipe("ImsvaleRoadPriorityUninstallPresence",
 		if not uninstall.wc then log("uninstall: no window container") end
 	end)
 	react.onStep(function()
-		if not uninstall.wanted then uninstall.dismissed = false end
-		local show = uninstall.wanted and not uninstall.dismissed
+		local show = uninstall.wanted
 		if show and not uninstall.open and uninstall.wc then
 			local ok, err = pcall(function() uninstall.wc.addSingletonWindow(UninstallWindow, {}) end)
 			if ok then uninstall.open = true else log("uninstall window: %s", tostring(err)) end

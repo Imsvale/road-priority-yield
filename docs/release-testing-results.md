@@ -152,5 +152,6 @@ is a different test (a section of its own, still to do).
   tram runs on the lane inside the bus lane (lane 3), so its track went. A tram track through a
   junction exists only along a connection the tram uses (`LaneConnection.withTram`). Fixed in 85:
   the lane rules leave tram connections as they are; a roundabout with tram tracks keeps its
-  lanes. **Retest d** (remove and apply again with "Overwrite lanes" on; the trace marks tram
-  connections with a `t`).
+  lanes. Retested: pass. Tram tracks connect every way at a junction anyway, so leaving them alone
+  is the right method (user).
+- §4 done: a-d pass.

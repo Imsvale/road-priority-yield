@@ -1,4 +1,5 @@
 local ssu = require "::/gui/main/stylesheetutil.lua"
+local color_util = require "::/gui/main/color_util.tl"
 
 -- The Priority Road tool's hover icons (IconOverlay in imsvale_priority_road_tool.script.lua)
 -- sit in a FloatingLayout whose children are placed by fractions of the layout. Without a
@@ -29,8 +30,18 @@ function data()
 		padding = { 8, 12, 12, 12 },
 		minSize = { 200, -1 },
 	})
+	-- Its buttons in the theme's blue, so they stand out (user, 2026-11-15): AccentMedium with the
+	-- game's hover and pressed shades, as the game bar's checked buttons
+	-- (::/gui/game_bar/game_bar.css.lua).
 	a("Button!imsvale-uninstall-button", {
 		margin = { 8, 0, 0, 0 },
+		backgroundColor1 = colorDefault.AccentMedium,
+	})
+	a("Button!imsvale-uninstall-button:hover", {
+		backgroundColor1 = color_util.getHoverFromRaw(colorDefault.AccentMedium),
+	})
+	a("Button!imsvale-uninstall-button:active", {
+		backgroundColor1 = color_util.getActiveFromRaw(colorDefault.AccentMedium),
 	})
 	a("TextView!imsvale-uninstall-section", {
 		margin = { 12, 0, 0, 0 },
