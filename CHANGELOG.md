@@ -1,8 +1,5 @@
 # Changelog
 
-Each release: version, the `revision` in `mod/mod.json` (what the game shows), date. The
-entry is also the changelog text for the mod.io upload.
-
-## Unreleased
+## Version 1.0.0 (2026-11-15)
 
 - First release.
