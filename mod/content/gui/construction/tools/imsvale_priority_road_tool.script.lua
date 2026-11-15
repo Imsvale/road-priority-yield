@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 100 (on-screen junctions by default; Ctrl for the whole road)"
+local VERSION = "priority road 101 (log why no junction counts as on screen)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1819,6 +1819,7 @@ local function cameraKey()
 	return key
 end
 
+local lastScreenLog = nil -- the last screenPlan diagnostic logged (GUI module state)
 -- The road plan cut down to the junctions on screen (the default: without Ctrl). Roundabouts stay
 -- whole: a ring is one thing. Lines over the road's segments with a node on screen; icons for the
 -- junctions kept.
@@ -1828,7 +1829,28 @@ local function screenPlan(p)
 	for _, j in ipairs(p.junctions) do
 		if (not p.remove or j.removeHere) and onScreen(j.node) then kept[#kept + 1] = j end
 	end
-	if #kept == 0 then return nil, "No junction on screen" end
+	if #kept == 0 then
+		-- what was decided, per junction (a test aid: the message showed with junctions in view)
+		local parts = {}
+		local size = api.gui.camera.getSize()
+		for _, j in ipairs(p.junctions) do
+			local where = "?"
+			pcall(function()
+				local q = api.engine.getComponent(j.node, CT.BASE_NODE).position
+				local v = api.gui.camera.world2Screen(api.type.Vec3f.new(q.x, q.y, q.z))
+				where = string.format("%d,%d", v.x, v.y)
+			end)
+			parts[#parts + 1] = string.format("%d at %s on screen %s%s", j.node, where, tostring(onScreen(j.node)),
+				p.remove and (j.removeHere and " (removed here)" or " (not in the stretch)") or "")
+		end
+		local line = string.format("none on screen (%s, screen %d x %d): %s", p.remove and "removing" or "applying",
+			size.x, size.y, table.concat(parts, "; "))
+		if line ~= lastScreenLog then
+			lastScreenLog = line
+			log("%s", line)
+		end
+		return nil, "No junction on screen"
+	end
 	local sp = { kind = p.kind, round = p.round, typeId = p.typeId, seg0 = p.seg0, junctions = kept,
 		remove = p.remove, screen = true, ours = 0, entries = 0, applied = 0, skipped = 0,
 		segs = {}, removeSegs = {}, yieldSegs = {}, icons = {}, nodes = {} }
