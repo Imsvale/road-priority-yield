@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 93 (Uninstall button placed in screen pixels)"
+local VERSION = "priority road 94 (Uninstall button 1 px left, aligned with the Settings window)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1871,7 +1871,9 @@ local function settingsCorner()
 		local s = api.gui.byId.getSize(SETTINGS_WINDOW_ID)
 		sx, sy = s and s.x, s and s.y
 	end)
-	local cx, cy = (w - 20) / w, (h - 360 + UNINSTALL_GAP) / h
+	-- 21: the window's visible right edge is 1 px further in than its stylesheet margin (in game,
+	-- 2026-11-15)
+	local cx, cy = (w - 21) / w, (h - 360 + UNINSTALL_GAP) / h
 	local line = string.format("uninstall button: settings visible %s (%s), size %s x %s, screen %d x %d -> %.3f, %.3f",
 		tostring(visible), okVis and "read" or "failed", tostring(sx), tostring(sy), w, h, cx, cy)
 	if line ~= cornerLogged then
