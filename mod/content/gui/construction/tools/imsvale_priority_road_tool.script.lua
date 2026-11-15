@@ -2885,8 +2885,8 @@ local function getDefinition(constructionDefinition, _repository, _params)
 		-- 720 x 405 as road-priority_preview@2x.tga, named without the @2x (drawn at half size, as the
 		-- game's own previews)
 		previewIcon = { icon = "imsvale_road_priority_yield::/gui/road-priority_preview.tga" },
-		name = "Priority Road",
-		description = "Side roads yield to the road or roundabout you click.",
+		name = "Priority Road & Roundabouts",
+		description = "Enable or disable priority rules for roads and roundabouts.",
 		action = "ACTION_CUSTOM",
 		availability = { yearFrom = 0, yearTo = 0 },
 		params = {
