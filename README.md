@@ -7,7 +7,11 @@ For roundabouts it works so well that you'd never know the difference. Most impo
 Cosmetics: It also places yield signs at intersections, stacked yield + roundabout signs at roundabout entries, and priority signs at intervals along priority roads.
 
 ## How to use
-The tool is found under Road → Tools. The icon is a large priority diamond sign with small yield and roundabout signs. Select the Road Priority and Yield tool, then click a roundabout or a stretch of road you want to have priority Click again to remove it.
+The tool is found under Road → Tools. The icon is a large priority diamond sign with small yield and roundabout signs. Select the tool, then click a roundabout or near a junction on a stretch of road you want to give priority.
+
+* Normal click targets any junction on screen along the same stretch of road.
+* Hold Shift for a single junction.
+* Hold Ctrl for the entire road with no limit.
 
 ## Options
 
