@@ -54,7 +54,7 @@ local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gu
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 
-local VERSION = "priority road 105 (Ctrl-click taken from the mouse events)"
+local VERSION = "priority road 106 (no tooltip on a road without junctions)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -530,7 +530,9 @@ local function planFrom(seg)
 			end
 		end
 	end
-	if #plan.junctions == 0 then return nil, plan.kind .. " with no junctions on it" end
+	-- nothing to apply to: no tooltip (user, 2026-11-15: "Priority road with no junctions on it"
+	-- named a priority road that wasn't one)
+	if #plan.junctions == 0 then return nil, nil end
 	if not typeId then return nil, "the Yield (invisible) light type wasn't found" end
 	return plan
 end
