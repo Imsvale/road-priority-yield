@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 121 (controller legend labels from the input action handlers)"
+local VERSION = "priority road 122 (LB+Y out of the legend; hint diagnostics)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2274,6 +2274,16 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	-- Not mouse-transparent, unlike the icons: it takes its clicks.
 	local cx, cy = settingsCorner()
 	-- The LB+Y hint (see settingsHint), with a controller only (hintSource).
+	do -- (diagnostics, 2026-11-16: the hint didn't show)
+		local hx, hy = nil, nil
+		if param.hintSource then hx, hy = settingsHint() end
+		local line = string.format("LB+Y hint: source %s, at %s, %s", tostring(param.hintSource ~= nil),
+			hx and string.format("%.3f", hx) or "-", hy and string.format("%.3f", hy) or "-")
+		if line ~= diag.hint then
+			diag.hint = line
+			log("%s", line)
+		end
+	end
 	if param.hintSource then
 		local hx, hy = settingsHint()
 		if hx then
@@ -2308,7 +2318,7 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 end)
 
 local lastStyle = nil -- the drop-down's value last seen (GUI module state)
-local diag = { frame = 0, seen = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
+local diag = { frame = 0, seen = nil, hint = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
 -- The panel's values as last seen, per key (GUI module state). getCurrentParams() leaves out the
 -- parameters hidden by the tabs (construction.tl getCurrentValues(false)), so a setting on another
 -- tab read as missing: applying from the Roundabouts tab took "Overwrite lanes" as unticked
