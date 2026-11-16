@@ -4,7 +4,7 @@
 
 - Large controller compatibility pass. Should now work nicely.
 - Reworked the Uninstall button. It now lives properly in the Settings window. Credit to Road & Rail Upgrade Brush mod for demonstrating the button trick.
-- Fixed missing legend (bottom right key/button guide).n
+- Fixed missing legend (bottom right key/button guide).
 
 ## Version 1.0.1 (2026-11-15)
 
