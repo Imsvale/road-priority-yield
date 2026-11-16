@@ -57,8 +57,8 @@ local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
 -- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
 local TEST_NO_OVERLAY = true
-local TEST_NO_PARAMS = true -- TEMPORARY (2026-11-16): the tool without settings (a test)
-local VERSION = "priority road 115 (TEST: no overlay, no settings; gamepad crosshair; menu events logged)"
+local TEST_NO_PARAMS = false -- TEMPORARY (2026-11-16): the tool without settings (a test)
+local VERSION = "priority road 116 (gamepad: live while the action is mounted, own focus node; TEST: no overlay)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2570,6 +2570,25 @@ UninstallPresence = react.RegisterRecipe("ImsvaleRoadPriorityUninstallPresence",
 	return builtin.FloatingLayout{ meta = { mouseTransparent = true }, children = {} }
 end)
 
+-- A focusable node for a controller: the construction menu leaves the controller's focus on the
+-- tool's icon, where its presses go to the icon (A re-clicked it, user's report 2026-11-16).
+-- The tool's recipe shows this node while in the menu's "Action" focus mode and focuses it, so its
+-- input actions (registered in the same recipe) get the presses. `want`: a ref, set when focus
+-- should be (re)taken; cleared once done.
+local PadFocus = react.RegisterRecipe("ImsvalePriorityRoadPadFocus", function(param)
+	local self = react.useSelfRef()
+	react.setForceFocusable(true)
+	react.onStep(function()
+		if not param.want:get() then return end
+		local n = self:get()
+		if n then
+			n:focus()
+			param.want:set(false)
+			log("frame %d: focus taken", diag.frame)
+		end
+	end)
+end)
+
 local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", function(params)
 	local revision = react.useState(0)
 	local message = react.useState(nil)
@@ -2647,6 +2666,18 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	-- Gamepad: what the action's click does, set by the action each redraw (see gamepadMode).
 	local gamepad = engine_react_util.useStepState(gamepadMode)
 	local applyRef = react.useRef(nil)
+	-- With a controller the menu drops isActive the frame after A activates the tool, while the
+	-- tool's action stays mounted (its preview went on): there the tool counts as live while its
+	-- action is mounted. The menu's focus mode ("Action", "BottomBar", "Params": Y and LB+Y switch,
+	-- construction.tl) decides whether the tool or a settings panel has the controller.
+	local mounted = react.useState(false)
+	local focusMode = react.useState("Action")
+	local wantFocus = react.useRef(true)
+	react.onEvent("constructionMenuChangeFocusMode", function(_, value)
+		log("frame %d: focus mode %s", diag.frame, tostring(value))
+		focusMode:set(value)
+		if value == "Action" then wantFocus:set(true) end
+	end)
 
 	-- (gamepad diagnostics, 2026-11-16: what the tool sees while focus is stuck; A activated and
 	-- deactivated the tool in one frame. The menu's events, with a frame count, show who did it.)
@@ -2657,19 +2688,34 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		"constructionMenuToggleParamsFocus" }) do
 		react.onEvent(name, function() log("frame %d: event %s", diag.frame, name) end)
 	end
-	local seenKey = tostring(params.isActive) .. "/" .. tostring(gamepad:old())
+	local live = params.isActive or (gamepad:old() and mounted:old())
+	local seenKey = tostring(params.isActive) .. "/" .. tostring(gamepad:old()) .. "/" .. tostring(mounted:old())
 	if seenKey ~= diag.seen then
 		diag.seen = seenKey
-		log("frame %d: tool active %s, gamepad %s", diag.frame, tostring(params.isActive), tostring(gamepad:old()))
+		log("frame %d: tool active %s, gamepad %s, action mounted %s", diag.frame, tostring(params.isActive),
+			tostring(gamepad:old()), tostring(mounted:old()))
 	end
 
-	if not params.isActive then
+	if not live then
 		return
 	end
 
-	if gamepad:old() then
+	local pad = gamepad:old()
+	local inWorld = focusMode:old() == "Action"
+	if pad then
+		-- The construction menu's two settings panels (Y and LB+Y on a controller), which a tool
+		-- has to pass on itself, as the game's construction tools do (construction_react_util,
+		-- "open_bottom_bar" / "open_params_window"; user, 2026-11-16).
+		react.useInputAction("IA_OPTION2", react.iaHandler(function()
+			react.fireEvent(nil, "constructionMenuToggleBottomBarFocus")
+		end))
+		react.useInputAction("IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", react.iaHandler(function()
+			react.fireEvent(nil, "constructionMenuToggleParamsFocus")
+		end))
+	end
+	if pad and inWorld then
 		react.useInputAction("IA_APPLY", react.iaHandler(function()
-			log("IA_APPLY")
+			log("frame %d: IA_APPLY", diag.frame)
 			local a = applyRef:get()
 			if a then a.apply() end
 			return true
@@ -2677,21 +2723,15 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			local a = applyRef:get()
 			return a ~= nil and a.can()
 		end))
-		react.useInputAction("IA_MENU_BACK", react.iaHandler(function()
-			log("IA_MENU_BACK")
+		-- Back: out of the tool, into the menu. IA_CLOSE_TOPMOST_WINDOW too, which the game's
+		-- note says actions use to capture "back" before the menu's IA_MENU_BACK (construction.tl).
+		local function back()
+			log("frame %d: back", diag.frame)
+			mounted:set(false)
 			params.abort()
-		end))
-		-- The construction menu's two settings panels (Y and LB+Y on a controller), which a tool
-		-- has to pass on itself, as the game's construction tools do (construction_react_util,
-		-- "open_bottom_bar" / "open_params_window"; user, 2026-11-16).
-		if not TEST_NO_OVERLAY then -- TEMPORARY: off with the overlay, to see what the menu does alone
-		react.useInputAction("IA_OPTION2", react.iaHandler(function()
-			react.fireEvent(nil, "constructionMenuToggleBottomBarFocus")
-		end))
-		react.useInputAction("IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", react.iaHandler(function()
-			react.fireEvent(nil, "constructionMenuToggleParamsFocus")
-		end))
 		end
+		react.useInputAction("IA_MENU_BACK", react.iaHandler(back))
+		react.useInputAction("IA_CLOSE_TOPMOST_WINDOW", react.iaHandler(back))
 	end
 
 	local function actionFn()
@@ -2700,6 +2740,8 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		-- junction, and Shift comes and goes; redrawn only when that changes.
 		local hovered = react.useState(nil)
 		local resolved = react.useState({ key = "" })
+		react.onMount(function() mounted:set(true) end)
+		react.onUnmount(function() if not mounted:hasExpired() then mounted:set(false) end end)
 		react.onStep(function()
 			local e = hovered:old()
 			local s, t = nil, nil
@@ -2903,6 +2945,9 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	end
 
 	params.setActionFn(actionFn, "imsvale_priority_road_" .. tostring(revision:old()))
+	if pad and inWorld then
+		return builtin.BoxLayout{ children = { PadFocus({ want = wantFocus }) } }
+	end
 end)
 
 -- A junction that can't yield any more (bulldozed, no side road left, its light type changed or
