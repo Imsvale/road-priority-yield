@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 138 (Uninstall window: closable / movable left out on a console, api.util.isConsoleMode)"
+local VERSION = "priority road 139 (Uninstall window: a Close button where it has no X, and B closes it from inside)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2457,6 +2457,22 @@ local function removePlaceholders(ids)
 	log("placeholders: removing %d", #ids)
 end
 
+-- The window's state (GUI module state): `wanted` whether it should be open (the Uninstall button
+-- toggles it, its X clears it), `open` whether it's up.
+local uninstall = { wanted = false, open = false, wc = nil, refocus = false } -- refocus: hand the controller back to the tool (PadFocus)
+
+-- The window keys a console's window lacks: left out on a console (api.util.isConsoleMode, the
+-- game's own check, game.tl), whatever the input (a PS5 may have a mouse plugged in), and on PC
+-- in gamepad mode, where the X is hidden anyway. On a PS5, closable failed: "Could not assign
+-- value to userdata 'closable'" (react.lua makeUserdata, which errors on any key the engine
+-- object lacks; player's report on 1.0.2, 2026-11-16; the player: the console's window has no
+-- such field). movable too: makeUserdata stops at the first failing key, in no set order.
+local function windowExtras()
+	local console = false
+	pcall(function() console = api.util.isConsoleMode() == true end)
+	return not console and not gamepadMode()
+end
+
 local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallContent", function()
 	local counts = react.useState(nil)
 	local steps = react.useRef(0)
@@ -2523,10 +2539,28 @@ local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallConte
 			end,
 		}
 	end
+	-- Closing from inside, where the window has no X (a console, or a controller on PC: see
+	-- windowExtras). On a PS5 the window couldn't be closed at all in 1.0.3 (player's report,
+	-- 2026-11-16: B didn't close it, and other mods add a Close button for the same reason). The
+	-- tool's focus comes back afterwards (refocus).
+	local function close()
+		uninstall.wanted = false
+		uninstall.refocus = true
+	end
+	if not windowExtras() then
+		rows[#rows + 1] = builtin.Button{
+			meta = { class = "imsvale-uninstall-button imsvale-uninstall-close" },
+			content = builtin.TextView{ text = "Close" },
+			onClick = close,
+		}
+	end
 	-- A controller moves between the buttons with the D-pad, as in the game's windows (construction.tl,
 	-- view_manager.tl): focus traversal on the container (user, 2026-11-16: focus went to the window,
-	-- but couldn't move between its buttons).
+	-- but couldn't move between its buttons). And B closes it: the focus is in here, so these get the
+	-- press first (IA_CLOSE_TOPMOST_WINDOW as well, which the game's note says windows use for Back).
 	if gamepadMode() then
+		react.useInputAction("IA_MENU_BACK", react.iaHandler(close, nil, "Close"))
+		react.useInputAction("IA_CLOSE_TOPMOST_WINDOW", react.iaHandler(close))
 		react.useInputAction("IA_NAV_LEFT", react.iaFocusTraversal(true, false))
 		react.useInputAction("IA_NAV_RIGHT", react.iaFocusTraversal(true, true))
 		react.useInputAction("IA_NAV_UP", react.iaFocusTraversal(false, false))
@@ -2534,22 +2568,6 @@ local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallConte
 	end
 	return builtin.BoxLayout{ orientation = builtin.type.Orientation.Vertical, children = rows }
 end)
-
--- The window's state (GUI module state): `wanted` whether it should be open (the Uninstall button
--- toggles it, its X clears it), `open` whether it's up.
-local uninstall = { wanted = false, open = false, wc = nil, refocus = false } -- refocus: hand the controller back to the tool (PadFocus)
-
--- The window keys a console's window lacks: left out on a console (api.util.isConsoleMode, the
--- game's own check, game.tl), whatever the input (a PS5 may have a mouse plugged in), and on PC
--- in gamepad mode, where the X is hidden anyway. On a PS5, closable failed: "Could not assign
--- value to userdata 'closable'" (react.lua makeUserdata, which errors on any key the engine
--- object lacks; player's report on 1.0.2, 2026-11-16; the player: the console's window has no
--- such field). movable too: makeUserdata stops at the first failing key, in no set order.
-local function windowExtras()
-	local console = false
-	pcall(function() console = api.util.isConsoleMode() == true end)
-	return not console and not gamepadMode()
-end
 
 local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstallWindow", builtin.Window, function(param)
 	local extras = windowExtras()
