@@ -22,15 +22,15 @@ function data()
 	-- (::/gui/main/internal.css.lua, !action-constructionbuilder: the bus station etc.): Apply
 	-- first, ordered by sortKey, labels in Title Case. The labels of the buttons the tool handles
 	-- come with its input action handlers (iaHandler's third argument), so a button shows only
-	-- while it works (priority road 121); the two modifiers are polled, not handled: their labels
-	-- are here. Y (bottom bar) left out: the tool has nothing there. LB+Y left out too: the game
+	-- while it works (priority road 121); the two modifiers are polled, and get
+	-- handlers only for their labels (priority road 125: listed here with text, they didn't show). Y (bottom bar) left out: the tool has nothing there. LB+Y left out too: the game
 	-- shows it above the Settings window, not in the legend (the roundabout tool, user's screenshot
 	-- 2026-11-16); the tool draws that hint (settingsHint).
 	a("!input-controller R::ConstructionDefinitionItem R::ImsvalePriorityRoadAction", {
 		actionPromptList = {
 			{ ia = "IA_APPLY", sortKey = "action-imsvale-priority-road-1" },
-			{ ia = "IA_PRECISION_MODE", text = _("(Hold) One Junction"), sortKey = "action-imsvale-priority-road-3" },
-			{ ia = "IA_SECONDARY_MODE", text = _("(Hold) Whole Road"), sortKey = "action-imsvale-priority-road-4" },
+			{ ia = "IA_PRECISION_MODE", sortKey = "action-imsvale-priority-road-3" },
+			{ ia = "IA_SECONDARY_MODE", sortKey = "action-imsvale-priority-road-4" },
 			{ ia = "IA_MENU_BACK", sortKey = "action-imsvale-priority-road-5" },
 		},
 	})

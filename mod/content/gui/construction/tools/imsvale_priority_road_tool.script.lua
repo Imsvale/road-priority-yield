@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 124 (fix: the hint position in the overlay step)"
+local VERSION = "priority road 125 (controller: hold legends, Uninstall window navigation; dev: first in the menu)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2522,12 +2522,21 @@ local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallConte
 			end,
 		}
 	end
+	-- A controller moves between the buttons with the D-pad, as in the game's windows (construction.tl,
+	-- view_manager.tl): focus traversal on the container (user, 2026-11-16: focus went to the window,
+	-- but couldn't move between its buttons).
+	if gamepadMode() then
+		react.useInputAction("IA_NAV_LEFT", react.iaFocusTraversal(true, false))
+		react.useInputAction("IA_NAV_RIGHT", react.iaFocusTraversal(true, true))
+		react.useInputAction("IA_NAV_UP", react.iaFocusTraversal(false, false))
+		react.useInputAction("IA_NAV_DOWN", react.iaFocusTraversal(false, true))
+	end
 	return builtin.BoxLayout{ orientation = builtin.type.Orientation.Vertical, children = rows }
 end)
 
 -- The window's state (GUI module state): `wanted` whether it should be open (the Uninstall button
 -- toggles it, its X clears it), `open` whether it's up.
-local uninstall = { wanted = false, open = false, wc = nil }
+local uninstall = { wanted = false, open = false, wc = nil, refocus = false } -- refocus: hand the controller back to the tool (PadFocus)
 
 local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstallWindow", builtin.Window, function(param)
 	return builtin.Window{
@@ -2536,7 +2545,10 @@ local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstal
 		meta = { class = "imsvale-uninstall" },
 		title = "Uninstall",
 		closable = true,
-		onClose = function() uninstall.wanted = false end,
+		onClose = function()
+			uninstall.wanted = false
+			uninstall.refocus = true
+		end,
 		movable = true,
 		content = UninstallContent{},
 	}
@@ -2545,6 +2557,7 @@ end)
 local function closeUninstall()
 	if uninstall.open and uninstall.wc then
 		pcall(function() uninstall.wc.removeAllWindows(UninstallWindow) end)
+		uninstall.refocus = true
 	end
 	uninstall.open = false
 end
@@ -2591,11 +2604,12 @@ local PadFocus = react.RegisterRecipe("ImsvalePriorityRoadPadFocus", function(pa
 	local self = react.useSelfRef()
 	react.setForceFocusable(true)
 	react.onStep(function()
-		if not param.want:get() then return end
+		if not param.want:get() and not uninstall.refocus then return end
 		local n = self:get()
 		if n then
 			n:focus()
 			param.want:set(false)
+			uninstall.refocus = false
 			log("frame %d: focus taken", diag.frame)
 		end
 	end)
@@ -2734,6 +2748,10 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		end, nil, "Settings"))
 	end
 	if pad and inWorld then
+		-- The two modifiers are polled (shiftHeld, ctrlHeld); these handlers do nothing but give the
+		-- legend its entries: an action's prompt shows only while a handler is registered for it.
+		react.useInputAction("IA_PRECISION_MODE", react.iaHandler(function() end, nil, "(Hold) Single Junction"))
+		react.useInputAction("IA_SECONDARY_MODE", react.iaHandler(function() end, nil, "(Hold) Infinite Reach"))
 		react.useInputAction("IA_APPLY", react.iaHandler(function()
 			log("frame %d: IA_APPLY", diag.frame)
 			local a = applyRef:get()
@@ -3437,7 +3455,8 @@ local function getDefinition(constructionDefinition, _repository, _params)
 		customAction = { recipe = PriorityRoadAction },
 		menuCategory = {
 			categories = {
-				{ category = "roads_tools", order = 1250 },
+				-- dev builds: first in the list, easier to reach while testing (user, 2026-11-16)
+				{ category = "roads_tools", order = dev.menuFirst and -1000 or 1250 },
 			},
 		},
 	}
