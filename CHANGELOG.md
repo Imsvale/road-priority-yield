@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 1.0.4 (2026-11-16)
+
+- Further hotfix for unclosable Uninstall window on PS5.
+
 ## Version 1.0.3 (2026-11-16)
 
 - Tentative hotfix for Lua error on PS5 on pressing the Uninstall button.

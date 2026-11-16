@@ -1,6 +1,6 @@
 {
     "modId": "imsvale_road_priority_yield",
-    "revision": 4,
+    "revision": 5,
     "severityAdd": "None",
     "severityRemove": "Critical",
     "visible": true,
