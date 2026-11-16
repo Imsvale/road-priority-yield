@@ -55,7 +55,9 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 110 (gamepad: the settings panels on Y and LB+Y)"
+-- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
+local TEST_NO_OVERLAY = true
+local VERSION = "priority road 111 (TEST: no overlay, no Uninstall button)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2740,11 +2742,15 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				for _, ic in ipairs(plan.icons or {}) do planIcons[#planIcons + 1] = ic end
 			end
 		end
+		-- TEMPORARY (2026-11-16): the overlay (icons, Uninstall button) left out, to see whether the
+		-- full-screen layer blocks the controller's buttons.
+		if not TEST_NO_OVERLAY then
 		children[#children + 1] = builtin.FullScreenComponent{
 			recipe = IconOverlay,
 			param = { planIcons = planIcons, planNodes = plan and plan.nodes or {},
 				gameCtx = params.gameCtx },
 		}
+		end
 
 		-- No hover outline: the lines above show what a click does (user, 2026-10-21).
 		local none = color_util.withTransparency(constructionColors.Modifier.Valid, 0)
