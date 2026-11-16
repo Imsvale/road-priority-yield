@@ -1,3 +1,5 @@
+*Latest update: Controller compatibility*
+
 The game has no yield. And there's no way to mod it. There, I said it.
 
 Now, we *can* approximate it really, really well for roundabouts. And a little bit less well for normal intersections. That's what this mod does.
@@ -9,9 +11,9 @@ Cosmetics: It also places yield signs at intersections, stacked yield + roundabo
 ## How to use
 The tool is found under Road → Tools. The icon is a large priority diamond sign with small yield and roundabout signs. Select the tool, then click a roundabout or near a junction on a stretch of road you want to give priority.
 
-* Normal click targets any junction on screen along the same stretch of road.
-* Hold Shift for a single junction.
-* Hold Ctrl for the entire road with no limit.
+* Normal click targets any junction visible on screen along the same stretch of road, picking the direction by the road nearest the cursor.
+* Hold Shift (RB/R1) for a single junction.
+* Hold Ctrl (LB/L1) for the entire road with no limit.
 
 ## Options
 
@@ -45,9 +47,12 @@ The faux-yielding is achieved using a neat trick with traffic lights – which a
 ## Uninstall
 The mod is **not** safe to remove without first removing everything the mod has added to your save (that is, signs and junction configurations). An uninstall function is provided for safe removal. A warning is given on disabling the mod to remind you.
 
-Even if you disabled the mod and then saved the game, you can still re-enable it to bring back the uninstall function. This will restore everything back to a stable configuration. An extra function to remove any placeholder models in the world is included. This will also remove placeholders left from any other mod.
+Even if you disabled the mod and then saved the game, you can still re-enable it to bring back the uninstall function. This will restore everything back to a stable configuration.
 
-Once you have run the uninstall tool, the warning can be ignored and the mod safely removed.
+Once you have run the uninstall tool (Remove All), the warning can be ignored and the mod safely removed.
+
+**Placeholder models**
+An extra function is included to remove any placeholder models in the world. This will also remove placeholders left from any other mod.
 
 **Technical details**: If you disable the mod without first running the uninstall, and with things from the mod still in the save, sign assets will be replaced with placeholders (harmless, but a nuisance), and a stale traffic light index is left behind in junction configs (this is bad). If you try to modify roads near junctions previously configured with priority, the game will crash. To prevent this, the traffic light type index at that junction must first be reset back to a valid value that exists after the mod's invisible traffic light is removed (or to -1, signifying the default for the map's climate).
 
