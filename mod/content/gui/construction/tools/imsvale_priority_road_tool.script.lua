@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 123 (Uninstall a button in the panel; the LB+Y hint styled as the game styles its own)"
+local VERSION = "priority road 124 (fix: the hint position in the overlay step)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2181,7 +2181,8 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	local key = react.useState("")
 	react.onStep(function()
 		local parts = { tostring(configured.version), iconStyle }
-		local hx, hy = param.hintSource and settingsHint()
+		local hx, hy = nil, nil -- (not `source and settingsHint()`: `and` keeps only the first value)
+		if param.hintSource then hx, hy = settingsHint() end
 		parts[#parts + 1] = hx and string.format("h%.4f,%.4f", hx, hy) or "h-"
 		for _, p in ipairs(layout()) do
 			parts[#parts + 1] = string.format("%.4f,%.4f,%d,%.2f", p.x, p.y, p.size, p.alpha)
