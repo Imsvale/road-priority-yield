@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 128 (the LB+Y hint placed from the size of the Settings content)"
+local VERSION = "priority road 129 (TEST: marker at the LB+Y hint, and a test hint for A beside it)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2278,6 +2278,30 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 					meta = { class = "overflow-mode", styleSheet = styleutil.makeStyle{ anchorPoint = { 0.5, 1.0 } } },
 					source = param.hintSource,
 					inputAction = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION",
+				},
+			}
+			-- TEMPORARY (2026-11-16): a text marker at the hint's point (its left edge there), and a
+			-- second hint for IA_APPLY with the same source, 60 px to the right: whether the hint
+			-- shows for any action of this source, or only not for LB+Y
+			children[#children + 1] = builtin.FloatingLayoutChild{
+				localKey = "settingsHintMarker",
+				h = hx,
+				v = hy,
+				overflowMode = builtin.type.FloatingLayoutOverflowMode.Overflow,
+				item = builtin.TextView{
+					meta = { styleSheet = styleutil.makeStyle{ anchorPoint = { 0.0, 1.0 } } },
+					text = "[LB+Y]",
+				},
+			}
+			children[#children + 1] = builtin.FloatingLayoutChild{
+				localKey = "settingsHintApplyTest",
+				h = hx + 60 / math.max(api.gui.camera.getSize().x, 1),
+				v = hy,
+				overflowMode = builtin.type.FloatingLayoutOverflowMode.Overflow,
+				item = builtin.KeybindingHintDisplay{
+					meta = { class = "overflow-mode", styleSheet = styleutil.makeStyle{ anchorPoint = { 0.0, 1.0 } } },
+					source = param.hintSource,
+					inputAction = "IA_APPLY",
 				},
 			}
 		end
