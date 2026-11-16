@@ -57,7 +57,7 @@ local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
 -- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
 local TEST_NO_OVERLAY = true
-local VERSION = "priority road 113 (constants in K: under the locals limit; TEST: no overlay; gamepad crosshair)"
+local VERSION = "priority road 114 (TEST: no overlay; gamepad crosshair; menu events logged)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2268,7 +2268,7 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 end)
 
 local lastStyle = nil -- the drop-down's value last seen (GUI module state)
-local lastSeenKey = nil -- the tool's isActive / gamepad mode as last logged
+local diag = { frame = 0, seen = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
 -- The panel's values as last seen, per key (GUI module state). getCurrentParams() leaves out the
 -- parameters hidden by the tabs (construction.tl getCurrentValues(false)), so a setting on another
 -- tab read as missing: applying from the Roundabouts tab took "Overwrite lanes" as unticked
@@ -2647,11 +2647,19 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	local gamepad = engine_react_util.useStepState(gamepadMode)
 	local applyRef = react.useRef(nil)
 
-	-- (gamepad diagnostics, 2026-11-16: what the tool sees while focus is stuck)
+	-- (gamepad diagnostics, 2026-11-16: what the tool sees while focus is stuck; A activated and
+	-- deactivated the tool in one frame. The menu's events, with a frame count, show who did it.)
+	react.onStep(function() diag.frame = diag.frame + 1 end)
+	for _, name in ipairs({ "constructionOpenCalloutFromOnSelect", "constructionOpenCalloutFromHover",
+		"constructionSetSuppressCallout", "constructionMenuQuit", "constructionMenuSetTab",
+		"constructionMenuResetFocusMode", "constructionMenuToggleBottomBarFocus",
+		"constructionMenuToggleParamsFocus" }) do
+		react.onEvent(name, function() log("frame %d: event %s", diag.frame, name) end)
+	end
 	local seenKey = tostring(params.isActive) .. "/" .. tostring(gamepad:old())
-	if seenKey ~= lastSeenKey then
-		lastSeenKey = seenKey
-		log("tool active %s, gamepad %s", tostring(params.isActive), tostring(gamepad:old()))
+	if seenKey ~= diag.seen then
+		diag.seen = seenKey
+		log("frame %d: tool active %s, gamepad %s", diag.frame, tostring(params.isActive), tostring(gamepad:old()))
 	end
 
 	if not params.isActive then
@@ -2883,7 +2891,10 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		-- focus stayed on the tool's icon in the bottom bar, and Cross clicked the icon).
 		local pad = gamepadMode()
 		return builtin.ActionDescriptor{
-			onBack = function() params.abort() end,
+			onBack = function()
+				log("frame %d: onBack " .. string.char(10) .. "%s", diag.frame, debug and debug.traceback and debug.traceback() or "")
+				params.abort()
+			end,
 			children = children,
 			crosshair = pad,
 			terrainCirclePolicy = pad and "FocusSelection" or "Never",
