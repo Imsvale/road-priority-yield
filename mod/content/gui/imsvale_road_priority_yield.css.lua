@@ -70,6 +70,11 @@ function data()
 	a("Button!imsvale-uninstall-button:active", {
 		backgroundColor1 = color_util.getActiveFromRaw(colorDefault.AccentMedium),
 	})
+	-- The placeholder button's row with Back at its right end: stretched across the window, so its
+	-- spacer (horizontal-spacer) has the free width to take (priority road 140).
+	a("BoxLayout!imsvale-uninstall-row", {
+		gravity = { -1, 0 },
+	})
 	a("TextView!imsvale-uninstall-section", {
 		margin = { 12, 0, 0, 0 },
 	})

@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 139 (Uninstall window: a Close button where it has no X, and B closes it from inside)"
+local VERSION = "priority road 140 (Uninstall window: Back, styled, right on the placeholder row)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2512,8 +2512,9 @@ local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallConte
 		text = string.format("Placeholders: %d", #placeholders.ids)
 	end
 	rows[#rows + 1] = builtin.TextView{ meta = { class = "imsvale-uninstall-section" }, text = text }
+	local placeholderButton
 	if placeholders.ids and #placeholders.ids > 0 then
-		rows[#rows + 1] = builtin.Button{
+		placeholderButton = builtin.Button{
 			meta = { class = "imsvale-uninstall-button" },
 			content = builtin.TextView{ text = string.format("Remove %d", #placeholders.ids) },
 			onClick = function()
@@ -2524,7 +2525,7 @@ local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallConte
 			end,
 		}
 	else
-		rows[#rows + 1] = builtin.Button{
+		placeholderButton = builtin.Button{
 			meta = { class = "imsvale-uninstall-button" },
 			content = builtin.TextView{ text = "Find" },
 			onClick = function()
@@ -2547,19 +2548,33 @@ local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallConte
 		uninstall.wanted = false
 		uninstall.refocus = true
 	end
+	-- "Back", on the placeholder button's row, at its right end (user, 2026-11-16): a spacer between
+	-- them as the game's windows do (an empty Component, class horizontal-spacer, default.css.lua),
+	-- in a row stretched across the window (imsvale-uninstall-row). Only the one class: classes are
+	-- comma-separated, and "a b" (139) matched neither, so it had no button look.
 	if not windowExtras() then
-		rows[#rows + 1] = builtin.Button{
-			meta = { class = "imsvale-uninstall-button imsvale-uninstall-close" },
-			content = builtin.TextView{ text = "Close" },
-			onClick = close,
+		rows[#rows + 1] = builtin.BoxLayout{
+			meta = { class = "imsvale-uninstall-row" },
+			orientation = builtin.type.Orientation.Horizontal,
+			children = {
+				placeholderButton,
+				builtin.Component{ meta = { class = "horizontal-spacer" } },
+				builtin.Button{
+					meta = { class = "imsvale-uninstall-button" },
+					content = builtin.TextView{ text = "Back" },
+					onClick = close,
+				},
+			},
 		}
+	else
+		rows[#rows + 1] = placeholderButton
 	end
 	-- A controller moves between the buttons with the D-pad, as in the game's windows (construction.tl,
 	-- view_manager.tl): focus traversal on the container (user, 2026-11-16: focus went to the window,
 	-- but couldn't move between its buttons). And B closes it: the focus is in here, so these get the
 	-- press first (IA_CLOSE_TOPMOST_WINDOW as well, which the game's note says windows use for Back).
 	if gamepadMode() then
-		react.useInputAction("IA_MENU_BACK", react.iaHandler(close, nil, "Close"))
+		react.useInputAction("IA_MENU_BACK", react.iaHandler(close, nil, "Back"))
 		react.useInputAction("IA_CLOSE_TOPMOST_WINDOW", react.iaHandler(close))
 		react.useInputAction("IA_NAV_LEFT", react.iaFocusTraversal(true, false))
 		react.useInputAction("IA_NAV_RIGHT", react.iaFocusTraversal(true, true))
