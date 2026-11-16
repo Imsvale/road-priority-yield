@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 135 (Uninstall window: no close button with a controller; closable failed on PS5)"
+local VERSION = "priority road 136 (Uninstall window: closable left out entirely with a controller)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2545,11 +2545,12 @@ local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstal
 		-- the tool couldn't untick).
 		meta = { class = "imsvale-uninstall" },
 		title = "Uninstall",
-		-- No close button with a controller, as the game's context help window does
-		-- (context_helper_react.tl: closable = not gamepad mode); B closes it there. On a PS5
-		-- closable = true failed outright: "Could not assign value to userdata 'closable'"
-		-- (react.lua makeUserdata; player's report, priority road 1.0.2, 2026-11-16).
-		closable = not gamepadMode(),
+		-- With a controller the key is left out (nil: makeUserdata skips it): on a PS5 assigning it
+		-- failed, "Could not assign value to userdata 'closable'" (react.lua makeUserdata, whose
+		-- PC version notes "this causes an error if the key doesn't exist!"; player's report on
+		-- 1.0.2, 2026-11-16). The console's window may have no such field at all, so false could
+		-- fail as true did. B closes the window; on PC with a controller its X was hidden anyway.
+		closable = (not gamepadMode()) and true or nil,
 		onClose = function()
 			uninstall.wanted = false
 			uninstall.refocus = true
