@@ -58,7 +58,7 @@ local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 -- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
 local TEST_NO_OVERLAY = true
 local TEST_NO_PARAMS = false -- TEMPORARY (2026-11-16): the tool without settings (a test)
-local VERSION = "priority road 116 (gamepad: live while the action is mounted, own focus node; TEST: no overlay)"
+local VERSION = "priority road 117 (checkboxes: No / Yes, for the controller drop-down; TEST: no overlay)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -3353,7 +3353,7 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				group = K.LANE_PARAM,
 				key = K.LANE_PARAM,
 				name = "Overwrite lanes",
-				values = { "Yes" },
+				values = { "No", "Yes" }, -- both: a controller shows a checkbox as a drop-down of its values
 				defaultIndex = 2, -- ticked
 				resetOnCategoryChange = false,
 				uiType = api.type.enum.ScriptParamType.CheckBox,
@@ -3367,7 +3367,7 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				group = K.DEDICATED_PARAM,
 				key = K.DEDICATED_PARAM,
 				name = "Dedicated turn lanes",
-				values = { "Yes" },
+				values = { "No", "Yes" }, -- both: a controller shows a checkbox as a drop-down of its values
 				defaultIndex = 1,
 				resetOnCategoryChange = false,
 				uiType = api.type.enum.ScriptParamType.CheckBox,
