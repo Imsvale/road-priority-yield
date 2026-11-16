@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 129 (TEST: marker at the LB+Y hint, and a test hint for A beside it)"
+local VERSION = "priority road 130 (TEST: the LB+Y hint by sourceId, the focus node registering LB+Y; marker)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2276,13 +2276,11 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 				overflowMode = builtin.type.FloatingLayoutOverflowMode.Overflow,
 				item = builtin.KeybindingHintDisplay{
 					meta = { class = "overflow-mode", styleSheet = styleutil.makeStyle{ anchorPoint = { 0.5, 1.0 } } },
-					source = param.hintSource,
+					sourceId = K.PAD_ID,
 					inputAction = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION",
 				},
 			}
-			-- TEMPORARY (2026-11-16): a text marker at the hint's point (its left edge there), and a
-			-- second hint for IA_APPLY with the same source, 60 px to the right: whether the hint
-			-- shows for any action of this source, or only not for LB+Y
+			-- TEMPORARY (2026-11-16): a text marker at the hint's point (its left edge there)
 			children[#children + 1] = builtin.FloatingLayoutChild{
 				localKey = "settingsHintMarker",
 				h = hx,
@@ -2291,17 +2289,6 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 				item = builtin.TextView{
 					meta = { styleSheet = styleutil.makeStyle{ anchorPoint = { 0.0, 1.0 } } },
 					text = "[LB+Y]",
-				},
-			}
-			children[#children + 1] = builtin.FloatingLayoutChild{
-				localKey = "settingsHintApplyTest",
-				h = hx + 60 / math.max(api.gui.camera.getSize().x, 1),
-				v = hy,
-				overflowMode = builtin.type.FloatingLayoutOverflowMode.Overflow,
-				item = builtin.KeybindingHintDisplay{
-					meta = { class = "overflow-mode", styleSheet = styleutil.makeStyle{ anchorPoint = { 0.0, 1.0 } } },
-					source = param.hintSource,
-					inputAction = "IA_APPLY",
 				},
 			}
 		end
@@ -2628,9 +2615,16 @@ end)
 -- The tool's recipe shows this node while in the menu's "Action" focus mode and focuses it, so its
 -- input actions (registered in the same recipe) get the presses. `want`: a ref, set when focus
 -- should be (re)taken; cleared once done.
+K.PAD_ID = "imsvale.priority-road.pad-focus" -- PadFocus's id: the LB+Y hint's source (sourceId)
 local PadFocus = react.RegisterRecipe("ImsvalePriorityRoadPadFocus", function(param)
 	local self = react.useSelfRef()
 	react.setForceFocusable(true)
+	-- LB+Y here, on the node that holds the focus, so the hint at the Settings window can name it
+	-- by id: a hint given the tool's recipe as `source` (a ref into the menu's tree, drawn in the
+	-- full-screen overlay's tree) showed nothing, for LB+Y and for A alike (priority road 129).
+	react.useInputAction("IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", react.iaHandler(function()
+		react.fireEvent(nil, "constructionMenuToggleParamsFocus")
+	end, nil, "Settings"))
 	react.onStep(function()
 		if not param.want:get() and not uninstall.refocus then return end
 		local n = self:get()
@@ -3008,7 +3002,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 	params.setActionFn(actionFn, "imsvale_priority_road_" .. tostring(revision:old()))
 	if pad and inWorld then
-		return builtin.BoxLayout{ children = { PadFocus({ want = wantFocus }) } }
+		return builtin.BoxLayout{ children = { PadFocus({ want = wantFocus, meta = { id = K.PAD_ID } }) } }
 	end
 end)
 
