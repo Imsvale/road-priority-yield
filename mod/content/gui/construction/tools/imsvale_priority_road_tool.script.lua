@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 127 (TEST: hint marker; log the Settings window and content sizes)"
+local VERSION = "priority road 128 (the LB+Y hint placed from the size of the Settings content)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2109,7 +2109,7 @@ local toggleUninstall -- (): opens or closes the Uninstall window; defined with 
 -- right corner in 91-122 (settingsCorner); the button is a parameter in the panel now.
 K.SETTINGS_WINDOW_ID = "menu.construction.params.react"
 
-local diag = { frame = 0, seen = nil, hint = nil, sizes = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
+local diag = { frame = 0, seen = nil, hint = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
 
 -- The LB+Y key hint at the Settings window (a controller), where the game puts it for its own
 -- tools: the window adds a KeybindingHintDisplay for IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION to its own
@@ -2118,35 +2118,28 @@ local diag = { frame = 0, seen = nil, hint = nil, sizes = nil } -- gamepad diagn
 -- them, so ours is drawn here with the tool's recipe as its source, placed by the same numbers:
 -- the window (construction.css.lua, Window!construct-settings) 400 px wide, margin right 20 and
 -- bottom 360, growing upward; the hint (Window#menu.construction.params.react!construct-settings
--- KeybindingHintDisplay!overflow-mode) at a tenth of the window's width, its bottom centre 6 px
--- above the window's layout. The window's height from api.gui.byId.getSize (fractions of the
--- screen, frame and shadow included: K.SETTINGS_FRAME px of them). Pixels at UI scale 1, as
--- settingsCorner. Fractions of the screen, nil while the window isn't visible.
-K.SETTINGS_FRAME = 20 -- px of frame and shadow in the window's getSize (420 for 400 wide; the height taken alike)
+-- KeybindingHintDisplay!overflow-mode) at a tenth of the window's width, its bottom just above
+-- the window's top. Pixels at UI scale 1. Fractions of the screen, nil while the window isn't
+-- visible or its content not laid out yet.
+-- The window's height: its content's (id menu.construction.params.content.react) plus
+-- K.SETTINGS_FRAME. The window's own getSize is its content's plus a fixed 0.3944 of the screen
+-- (426 px at 1080) that isn't drawn (priority road 127, two tabs: 0.6630 / 0.2685 and 0.4852 /
+-- 0.0907): taken from it, the hint sat at the screen's top edge, hidden (120-126).
+K.SETTINGS_FRAME = 15 -- px the drawn window is taller than its content (305 for 290, 114 for 98; 2026-11-16)
+K.HINT_GAP = 3 -- px between the hint's bottom and the window's top (the game's roundabout tool, user's screenshot)
 local function settingsHint()
 	local visible = false
 	pcall(function() visible = api.gui.byId.isVisible(K.SETTINGS_WINDOW_ID) end)
 	if not visible then return nil end
 	local size = api.gui.camera.getSize()
 	local w, h = math.max(size.x, 1), math.max(size.y, 1)
-	local sy = nil
-	pcall(function() sy = api.gui.byId.getSize(K.SETTINGS_WINDOW_ID).y end)
-	if not sy then return nil end
-	-- (diagnostics, 2026-11-16: the window's getSize height isn't its drawn height; the marker sat
-	-- at the top of the screen while the window's top was at about y 415 of 1080)
-	local cs = nil
-	pcall(function() cs = api.gui.byId.getSize("menu.construction.params.content.react") end)
-	local line = string.format("settings sizes: window %.4f, content %s x %s (screen %d x %d)", sy,
-		cs and string.format("%.4f", cs.x) or "-", cs and string.format("%.4f", cs.y) or "-", w, h)
-	if line ~= diag.sizes then
-		diag.sizes = line
-		log("%s", line)
-	end
-	local top = h - 360 - (sy * h - K.SETTINGS_FRAME)
+	local cy = nil
+	pcall(function() cy = api.gui.byId.getSize("menu.construction.params.content.react").y end)
+	if not cy or cy <= 0 then return nil end
+	local top = h - 360 - (cy * h + K.SETTINGS_FRAME)
 	local x = w - 20 - 400 + 0.1 * 400
-	return x / w, (top - 6) / h
+	return x / w, (top - K.HINT_GAP) / h
 end
-
 
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
 	react.setMouseTransparent(true)
@@ -2285,18 +2278,6 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 					meta = { class = "overflow-mode", styleSheet = styleutil.makeStyle{ anchorPoint = { 0.5, 1.0 } } },
 					source = param.hintSource,
 					inputAction = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION",
-				},
-			}
-			-- TEMPORARY (2026-11-16): a plain text marker at the same point, to see whether the
-			-- placement is right while the hint itself doesn't show
-			children[#children + 1] = builtin.FloatingLayoutChild{
-				localKey = "settingsHintMarker",
-				h = hx,
-				v = hy,
-				overflowMode = builtin.type.FloatingLayoutOverflowMode.Overflow,
-				item = builtin.TextView{
-					meta = { styleSheet = styleutil.makeStyle{ anchorPoint = { 0.0, 1.0 } } },
-					text = "[LB+Y]",
 				},
 			}
 		end
