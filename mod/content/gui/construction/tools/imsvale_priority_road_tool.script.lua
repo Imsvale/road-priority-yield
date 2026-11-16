@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 134 (the legend with a mouse too)"
+local VERSION = "priority road 135 (Uninstall window: no close button with a controller; closable failed on PS5)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2545,7 +2545,11 @@ local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstal
 		-- the tool couldn't untick).
 		meta = { class = "imsvale-uninstall" },
 		title = "Uninstall",
-		closable = true,
+		-- No close button with a controller, as the game's context help window does
+		-- (context_helper_react.tl: closable = not gamepad mode); B closes it there. On a PS5
+		-- closable = true failed outright: "Could not assign value to userdata 'closable'"
+		-- (react.lua makeUserdata; player's report, priority road 1.0.2, 2026-11-16).
+		closable = not gamepadMode(),
 		onClose = function()
 			uninstall.wanted = false
 			uninstall.refocus = true
