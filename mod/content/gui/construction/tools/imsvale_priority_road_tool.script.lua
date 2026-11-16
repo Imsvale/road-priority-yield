@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 130 (TEST: the LB+Y hint by sourceId, the focus node registering LB+Y; marker)"
+local VERSION = "priority road 131 (the LB+Y hint by sourceId; test marker and diagnostics removed)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2109,7 +2109,7 @@ local toggleUninstall -- (): opens or closes the Uninstall window; defined with 
 -- right corner in 91-122 (settingsCorner); the button is a parameter in the panel now.
 K.SETTINGS_WINDOW_ID = "menu.construction.params.react"
 
-local diag = { frame = 0, seen = nil, hint = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
+local diag = { frame = 0, seen = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
 
 -- The LB+Y key hint at the Settings window (a controller), where the game puts it for its own
 -- tools: the window adds a KeybindingHintDisplay for IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION to its own
@@ -2186,7 +2186,7 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	react.onStep(function()
 		local parts = { tostring(configured.version), iconStyle }
 		local hx, hy = nil, nil -- (not `source and settingsHint()`: `and` keeps only the first value)
-		if param.hintSource then hx, hy = settingsHint() end
+		if param.hintOn then hx, hy = settingsHint() end
 		parts[#parts + 1] = hx and string.format("h%.4f,%.4f", hx, hy) or "h-"
 		for _, p in ipairs(layout()) do
 			parts[#parts + 1] = string.format("%.4f,%.4f,%d,%.2f", p.x, p.y, p.size, p.alpha)
@@ -2252,23 +2252,14 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 			item = UninstallPresence({ gameCtx = param.gameCtx }),
 		}
 	end
-	-- The LB+Y hint (see settingsHint), with a controller only (hintSource).
-	do -- (diagnostics, 2026-11-16: the hint didn't show)
-		local hx, hy = nil, nil
-		if param.hintSource then hx, hy = settingsHint() end
-		local line = string.format("LB+Y hint: source %s, at %s, %s", tostring(param.hintSource ~= nil),
-			hx and string.format("%.3f", hx) or "-", hy and string.format("%.3f", hy) or "-")
-		if line ~= diag.hint then
-			diag.hint = line
-			log("%s", line)
-		end
-	end
-	if param.hintSource then
+	-- The LB+Y hint (see settingsHint), with a controller only (hintOn).
+	if param.hintOn then
 		local hx, hy = settingsHint()
 		if hx then
-			-- class and overflow mode as the game's own hints have them (construction.tl): without
-			-- the class a KeybindingHintDisplay has gravity { 0, 0 } (keybinding_hint.css.lua), and
-			-- the hint didn't show (priority road 122, placed right and with its source)
+			-- As the game's own hints: class overflow-mode and overflow mode (construction.tl). Its
+			-- source by id (sourceId = PadFocus, which registers LB+Y): given as a ref (`source`, the
+			-- tool's recipe, in the menu's tree while this overlay is a tree of its own), the hint
+			-- showed nothing, for LB+Y and for A alike (120-129); by id it shows (130).
 			children[#children + 1] = builtin.FloatingLayoutChild{
 				localKey = "settingsHint",
 				h = hx,
@@ -2278,17 +2269,6 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 					meta = { class = "overflow-mode", styleSheet = styleutil.makeStyle{ anchorPoint = { 0.5, 1.0 } } },
 					sourceId = K.PAD_ID,
 					inputAction = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION",
-				},
-			}
-			-- TEMPORARY (2026-11-16): a text marker at the hint's point (its left edge there)
-			children[#children + 1] = builtin.FloatingLayoutChild{
-				localKey = "settingsHintMarker",
-				h = hx,
-				v = hy,
-				overflowMode = builtin.type.FloatingLayoutOverflowMode.Overflow,
-				item = builtin.TextView{
-					meta = { styleSheet = styleutil.makeStyle{ anchorPoint = { 0.0, 1.0 } } },
-					text = "[LB+Y]",
 				},
 			}
 		end
@@ -2713,8 +2693,6 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 	-- Gamepad: what the action's click does, set by the action each redraw (see gamepadMode).
 	local gamepad = engine_react_util.useStepState(gamepadMode)
-	-- This recipe registers LB+Y: the source of its key hint at the Settings window (IconOverlay).
-	local selfRef = react.useSelfRef()
 	local applyRef = react.useRef(nil)
 	-- With a controller the menu drops isActive the frame after A activates the tool, while the
 	-- tool's action stays mounted (its preview went on): there the tool counts as live while its
@@ -2736,12 +2714,6 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	-- (gamepad diagnostics, 2026-11-16: what the tool sees while focus is stuck; A activated and
 	-- deactivated the tool in one frame. The menu's events, with a frame count, show who did it.)
 	react.onStep(function() diag.frame = diag.frame + 1 end)
-	for _, name in ipairs({ "constructionOpenCalloutFromOnSelect", "constructionOpenCalloutFromHover",
-		"constructionSetSuppressCallout", "constructionMenuQuit", "constructionMenuSetTab",
-		"constructionMenuResetFocusMode", "constructionMenuToggleBottomBarFocus",
-		"constructionMenuToggleParamsFocus" }) do
-		react.onEvent(name, function() log("frame %d: event %s", diag.frame, name) end)
-	end
 	local live = params.isActive or (gamepad:old() and mounted:old())
 	local seenKey = tostring(params.isActive) .. "/" .. tostring(gamepad:old()) .. "/" .. tostring(mounted:old())
 	if seenKey ~= diag.seen then
@@ -2873,7 +2845,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		children[#children + 1] = builtin.FullScreenComponent{
 			recipe = IconOverlay,
 			param = { planIcons = planIcons, planNodes = plan and plan.nodes or {},
-				gameCtx = params.gameCtx, hintSource = gamepad:old() and selfRef or nil },
+				gameCtx = params.gameCtx, hintOn = gamepad:old() },
 		}
 
 		-- No hover outline: the lines above show what a click does (user, 2026-10-21).
