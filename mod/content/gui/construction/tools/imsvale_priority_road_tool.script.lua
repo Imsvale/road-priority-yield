@@ -57,7 +57,7 @@ local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
 -- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
 local TEST_NO_OVERLAY = true
-local VERSION = "priority road 111 (TEST: no overlay, no Uninstall button)"
+local VERSION = "priority road 111 (TEST: no overlay, no Uninstall button, no Y / LB+Y forwarding)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2660,12 +2660,14 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		-- The construction menu's two settings panels (Y and LB+Y on a controller), which a tool
 		-- has to pass on itself, as the game's construction tools do (construction_react_util,
 		-- "open_bottom_bar" / "open_params_window"; user, 2026-11-16).
+		if not TEST_NO_OVERLAY then -- TEMPORARY: off with the overlay, to see what the menu does alone
 		react.useInputAction("IA_OPTION2", react.iaHandler(function()
 			react.fireEvent(nil, "constructionMenuToggleBottomBarFocus")
 		end))
 		react.useInputAction("IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", react.iaHandler(function()
 			react.fireEvent(nil, "constructionMenuToggleParamsFocus")
 		end))
+		end
 	end
 
 	local function actionFn()
