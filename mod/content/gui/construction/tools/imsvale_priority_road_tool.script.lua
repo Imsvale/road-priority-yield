@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 125 (controller: hold legends, Uninstall window navigation; dev: first in the menu)"
+local VERSION = "priority road 126 (TEST: a text marker where the LB+Y hint should be)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2274,6 +2274,18 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 					meta = { class = "overflow-mode", styleSheet = styleutil.makeStyle{ anchorPoint = { 0.5, 1.0 } } },
 					source = param.hintSource,
 					inputAction = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION",
+				},
+			}
+			-- TEMPORARY (2026-11-16): a plain text marker at the same point, to see whether the
+			-- placement is right while the hint itself doesn't show
+			children[#children + 1] = builtin.FloatingLayoutChild{
+				localKey = "settingsHintMarker",
+				h = hx,
+				v = hy,
+				overflowMode = builtin.type.FloatingLayoutOverflowMode.Overflow,
+				item = builtin.TextView{
+					meta = { styleSheet = styleutil.makeStyle{ anchorPoint = { 0.0, 1.0 } } },
+					text = "[LB+Y]",
 				},
 			}
 		end
