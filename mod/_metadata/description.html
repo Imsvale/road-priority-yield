@@ -1,8 +1,8 @@
-<p>Latest update: Controller compatibility</p>
+<p><i>Latest update: Controller compatibility</i></p>
 
 <p>The game has no yield. And there's no way to mod it. There, I said it.</p>
 
-<p>Now, we can approximate it really, really well for roundabouts. And a little bit less well for normal intersections. That's what this mod does.</p>
+<p>Now, we <i>can</i> approximate it really, really well for roundabouts. And a little bit less well for normal intersections. That's what this mod does.</p>
 
 <p>For roundabouts it works so well that you'd never know the difference. Most importantly, it makes roundabouts flow like they are supposed to, without entering cars disrupting it.</p>
 
@@ -55,7 +55,7 @@
 
 <p>The faux-yielding is achieved using a neat trick with traffic lights – which are technically present, but invisible. This works surprisingly well thanks to how the traffic lights function in the game. The combination of (max) phase duration and phase skipping lets us emulate yielding extremely well for roundabouts, allowing them to work as they should, and a bit less well for normal intersections (because there are more lanes involved). I can't make the behavior perfectly realistic, but it gets reasonably close, and the important thing is the cars on side roads yield. They will still sometimes misjudge how much time they have.</p>
 
-<p><b>Roundabouts specifically:</b> The outer lane is always exit-only. This is a conscious choice that, while not strictly realistic, makes a huge difference in the flow. Feel free to experiment with alternative lane config schemes, including allowing the rightmost lane to also go forward. You will see that cars exiting from this lane now still make entering cars wait, because they're in a lane that has a green light going forward, which conflicts with the entering lane connections, and therefore blocks the skipping of the traffic light phase. The game does not distinguish traffic based on where they're actually going, only which lane they're in. As such it clashes with the trick we're using to emulate yielding.</p>
+<p><b>Roundabouts specifically:</b> The outer lane is <i>always</i> exit-only. This is a conscious choice that, while not strictly realistic, makes a huge difference in the flow. Feel free to experiment with alternative lane config schemes, including allowing the rightmost lane to also go forward. You will see that cars exiting from this lane now still make entering cars wait, because they're in a lane that has a green light going forward, which conflicts with the entering lane connections, and therefore blocks the skipping of the traffic light phase. The game does not distinguish traffic based on where they're actually going, only which lane they're in. As such it clashes with the trick we're using to emulate yielding.</p>
 
 <h2>Uninstall</h2>
 
