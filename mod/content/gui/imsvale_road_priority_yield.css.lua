@@ -20,16 +20,18 @@ function data()
 	-- (::/gui/construction/construction.css.lua, R::IndustryGreenifyAction etc.). Without it the
 	-- tool showed no legend (priority road 117). Laid out as the game's construction builder's
 	-- (::/gui/main/internal.css.lua, !action-constructionbuilder: the bus station etc.): Apply
-	-- first, ordered by sortKey, labels in Title Case. The builder's Settings prompt (LB+Y) comes
-	-- from its action's inputActions, which a custom tool's ActionDescriptor can't take: listed
-	-- here instead. Y (bottom bar) left out: the tool has nothing there.
+	-- first, ordered by sortKey, labels in Title Case. The labels of the buttons the tool handles
+	-- come with its input action handlers (iaHandler's third argument), so a button shows only
+	-- while it works (priority road 121); the two modifiers are polled, not handled: their labels
+	-- are here. Y (bottom bar) left out: the tool has nothing there. The LB+Y hint at the Settings
+	-- window is drawn by the tool (settingsHint).
 	a("!input-controller R::ConstructionDefinitionItem R::ImsvalePriorityRoadAction", {
 		actionPromptList = {
-			{ ia = "IA_APPLY", text = _("Apply / Remove"), sortKey = "action-imsvale-priority-road-1" },
-			{ ia = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", text = _("Settings"), sortKey = "action-imsvale-priority-road-2" },
+			{ ia = "IA_APPLY", sortKey = "action-imsvale-priority-road-1" },
+			{ ia = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", sortKey = "action-imsvale-priority-road-2" },
 			{ ia = "IA_PRECISION_MODE", text = _("(Hold) One Junction"), sortKey = "action-imsvale-priority-road-3" },
 			{ ia = "IA_SECONDARY_MODE", text = _("(Hold) Whole Road"), sortKey = "action-imsvale-priority-road-4" },
-			{ ia = "IA_MENU_BACK", text = _("Back"), sortKey = "action-imsvale-priority-road-5" },
+			{ ia = "IA_MENU_BACK", sortKey = "action-imsvale-priority-road-5" },
 		},
 	})
 

@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 120 (overlay back; the LB+Y hint at the Settings window)"
+local VERSION = "priority road 121 (controller legend labels from the input action handlers)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2744,6 +2744,8 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	local pad = gamepad:old()
 	local inWorld = focusMode:old() == "Action"
 	if pad then
+		-- The legend's labels come with the handlers (iaHandler's third argument, promptTextOverride:
+		-- shown only while registered), the stylesheet rule giving only the order (priority road 121).
 		-- The construction menu's two settings panels (Y and LB+Y on a controller), which a tool
 		-- has to pass on itself, as the game's construction tools do (construction_react_util,
 		-- "open_bottom_bar" / "open_params_window"; user, 2026-11-16).
@@ -2752,7 +2754,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		end))
 		react.useInputAction("IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", react.iaHandler(function()
 			react.fireEvent(nil, "constructionMenuToggleParamsFocus")
-		end))
+		end, nil, "Settings"))
 	end
 	if pad and inWorld then
 		react.useInputAction("IA_APPLY", react.iaHandler(function()
@@ -2763,7 +2765,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		end, function()
 			local a = applyRef:get()
 			return a ~= nil and a.can()
-		end))
+		end, "Apply / Remove"))
 		-- Back: out of the tool, into the menu. IA_CLOSE_TOPMOST_WINDOW too, which the game's
 		-- note says actions use to capture "back" before the menu's IA_MENU_BACK (construction.tl).
 		local function back()
@@ -2771,7 +2773,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			mounted:set(false)
 			params.abort()
 		end
-		react.useInputAction("IA_MENU_BACK", react.iaHandler(back))
+		react.useInputAction("IA_MENU_BACK", react.iaHandler(back, nil, "Back"))
 		react.useInputAction("IA_CLOSE_TOPMOST_WINDOW", react.iaHandler(back))
 	end
 
