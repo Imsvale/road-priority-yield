@@ -57,7 +57,8 @@ local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
 -- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
 local TEST_NO_OVERLAY = true
-local VERSION = "priority road 114 (TEST: no overlay; gamepad crosshair; menu events logged)"
+local TEST_NO_PARAMS = true -- TEMPORARY (2026-11-16): the tool without settings (a test)
+local VERSION = "priority road 115 (TEST: no overlay, no settings; gamepad crosshair; menu events logged)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -3258,7 +3259,7 @@ end
 log("loaded: %s", VERSION)
 
 local function getDefinition(constructionDefinition, _repository, _params)
-	return {
+	local def = {
 		resName = constructionDefinition,
 		icon = { icon = "imsvale_road_priority_yield::/gui/priority-triple.tga" },
 		-- 720 x 405 as road-priority_preview@2x.tga, named without the @2x (drawn at half size, as the
@@ -3357,6 +3358,10 @@ local function getDefinition(constructionDefinition, _repository, _params)
 			},
 		},
 	}
+	-- TEMPORARY (2026-11-16): no settings, as the game's custom tools have none, to see whether
+	-- the settings panel is what deactivates the tool on a controller the frame after A.
+	if TEST_NO_PARAMS then def.params = {} end
+	return def
 end
 
 function data()
