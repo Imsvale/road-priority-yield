@@ -53,8 +53,9 @@ local color_util = ug_require "::/gui/main/color_util.tl"
 local constructionColors = api.gui.genericRep.get(api.gui.genericRep.find("::/gui/construction/construction_colors.gres")).data
 local construction_react_util = ug_require "::/gui/construction/construction_react_util.tl"
 local styleutil = ug_require "::/gui/main/styleutil.tl"
+local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 108 (roundabout tooltip; replaced roles shown in every mode)"
+local VERSION = "priority road 109 (gamepad: apply with IA_APPLY, back with IA_MENU_BACK)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -1806,6 +1807,16 @@ local function ctrlHeld()
 	return held
 end
 
+-- Gamepad input (consoles, or a controller on PC): the game's own custom tools then apply with
+-- IA_APPLY (Cross / A) and leave with IA_MENU_BACK, as construction_react_util's selector-based
+-- actions do; the Selector's onSelect is the mouse click (user's report from PS5, 2026-11-16:
+-- the tool hovered, but nothing applied). Shift and Ctrl are input actions too (R1 / L1).
+local function gamepadMode()
+	local on = false
+	pcall(function() on = api.util.getInputMode() == api.type.enum.InputMode.Gamepad end)
+	return on
+end
+
 -- Whether a node is on screen: its position projected inside the camera's view.
 local function onScreen(node)
 	local inside = false
@@ -2626,8 +2637,24 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	react.setForceFocusable(true)
 	react.setRestrictMouseFocus(true)
 
+	-- Gamepad: what the action's click does, set by the action each redraw (see gamepadMode).
+	local gamepad = engine_react_util.useStepState(gamepadMode)
+	local applyRef = react.useRef(nil)
+
 	if not params.isActive then
 		return
+	end
+
+	if gamepad:old() then
+		react.useInputAction("IA_APPLY", react.iaHandler(function()
+			local a = applyRef:get()
+			if a then a.apply() end
+			return true
+		end, function()
+			local a = applyRef:get()
+			return a ~= nil and a.can()
+		end))
+		react.useInputAction("IA_MENU_BACK", react.iaHandler(function() params.abort() end))
 	end
 
 	local function actionFn()
@@ -2755,6 +2782,13 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			end)
 			return true
 		end
+		applyRef:set({
+			apply = function()
+				local e = hovered:old()
+				if e then click(e) end
+			end,
+			can = function() return hovered:old() ~= nil and not pending:old() end,
+		})
 		children[#children + 1] = builtin.Selector{
 			selectionColor = none,
 			selectionOutlineColor = none,
@@ -2767,7 +2801,8 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			-- road, the click did nothing), so a Ctrl-click is taken from the mouse events, on the
 			-- entity last hovered; onSelect leaves Ctrl-clicks to it so none runs twice.
 			onSelect = function(entity)
-				if ctrlHeld() then return true end
+				-- a gamepad applies with IA_APPLY above, so one press can't apply twice
+				if ctrlHeld() or gamepadMode() then return true end
 				return click(entity)
 			end,
 			onProcessMouseEvent = function(evt)
