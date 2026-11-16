@@ -1,5 +1,9 @@
 # Changelog
 
+## Version 1.0.3 (2026-11-16)
+
+- Tentative hotfix for Lua error on PS5 on pressing the Uninstall button.
+
 ## Version 1.0.2 (2026-11-16)
 
 - Large controller compatibility pass. Should now work nicely.
