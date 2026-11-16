@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 136 (Uninstall window: closable left out entirely with a controller)"
+local VERSION = "priority road 137 (Uninstall window: closable and movable left out with a controller)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2555,7 +2555,9 @@ local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstal
 			uninstall.wanted = false
 			uninstall.refocus = true
 		end,
-		movable = true,
+		-- movable left out with a controller too: makeUserdata stops at the first key that fails,
+		-- in no set order, so this one may be next on a console; it means nothing without a mouse
+		movable = (not gamepadMode()) and true or nil,
 		content = UninstallContent{},
 	}
 end)
