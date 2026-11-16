@@ -57,7 +57,7 @@ local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
 -- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
 local TEST_NO_OVERLAY = true
-local VERSION = "priority road 111 (TEST: no overlay, no Uninstall button, no Y / LB+Y forwarding)"
+local VERSION = "priority road 112 (TEST: no overlay; gamepad crosshair; focus diagnostics)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2265,6 +2265,7 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 end)
 
 local lastStyle = nil -- the drop-down's value last seen (GUI module state)
+local lastSeenKey = nil -- the tool's isActive / gamepad mode as last logged
 -- The panel's values as last seen, per key (GUI module state). getCurrentParams() leaves out the
 -- parameters hidden by the tabs (construction.tl getCurrentValues(false)), so a setting on another
 -- tab read as missing: applying from the Roundabouts tab took "Overwrite lanes" as unticked
@@ -2643,12 +2644,20 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	local gamepad = engine_react_util.useStepState(gamepadMode)
 	local applyRef = react.useRef(nil)
 
+	-- (gamepad diagnostics, 2026-11-16: what the tool sees while focus is stuck)
+	local seenKey = tostring(params.isActive) .. "/" .. tostring(gamepad:old())
+	if seenKey ~= lastSeenKey then
+		lastSeenKey = seenKey
+		log("tool active %s, gamepad %s", tostring(params.isActive), tostring(gamepad:old()))
+	end
+
 	if not params.isActive then
 		return
 	end
 
 	if gamepad:old() then
 		react.useInputAction("IA_APPLY", react.iaHandler(function()
+			log("IA_APPLY")
 			local a = applyRef:get()
 			if a then a.apply() end
 			return true
@@ -2656,7 +2665,10 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			local a = applyRef:get()
 			return a ~= nil and a.can()
 		end))
-		react.useInputAction("IA_MENU_BACK", react.iaHandler(function() params.abort() end))
+		react.useInputAction("IA_MENU_BACK", react.iaHandler(function()
+			log("IA_MENU_BACK")
+			params.abort()
+		end))
 		-- The construction menu's two settings panels (Y and LB+Y on a controller), which a tool
 		-- has to pass on itself, as the game's construction tools do (construction_react_util,
 		-- "open_bottom_bar" / "open_params_window"; user, 2026-11-16).
@@ -2863,10 +2875,15 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			}
 		end
 
+		-- Gamepad: a crosshair, as the game's custom tools and map layers have, which presumably
+		-- takes the controller's focus from the menu into the world (user's report, 2026-11-16:
+		-- focus stayed on the tool's icon in the bottom bar, and Cross clicked the icon).
+		local pad = gamepadMode()
 		return builtin.ActionDescriptor{
 			onBack = function() params.abort() end,
 			children = children,
-			terrainCirclePolicy = "Never",
+			crosshair = pad,
+			terrainCirclePolicy = pad and "FocusSelection" or "Never",
 		}
 	end
 
