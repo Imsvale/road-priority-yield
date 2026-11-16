@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 132 (the LB+Y hint follows the UI scale; Back with a mouse leaves the tool; diagnostics removed)"
+local VERSION = "priority road 133 (legend: (Hold) One Junction, (Hold) Whole Road)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2738,8 +2738,8 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	if pad and inWorld then
 		-- The two modifiers are polled (shiftHeld, ctrlHeld); these handlers do nothing but give the
 		-- legend its entries: an action's prompt shows only while a handler is registered for it.
-		react.useInputAction("IA_PRECISION_MODE", react.iaHandler(function() end, nil, "(Hold) Single Junction"))
-		react.useInputAction("IA_SECONDARY_MODE", react.iaHandler(function() end, nil, "(Hold) Infinite Reach"))
+		react.useInputAction("IA_PRECISION_MODE", react.iaHandler(function() end, nil, "(Hold) One Junction"))
+		react.useInputAction("IA_SECONDARY_MODE", react.iaHandler(function() end, nil, "(Hold) Whole Road"))
 		react.useInputAction("IA_APPLY", react.iaHandler(function()
 			local a = applyRef:get()
 			if a then a.apply() end
