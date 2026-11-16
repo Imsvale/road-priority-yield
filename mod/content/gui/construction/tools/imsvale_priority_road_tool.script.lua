@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 122 (LB+Y out of the legend; hint diagnostics)"
+local VERSION = "priority road 123 (Uninstall a button in the panel; the LB+Y hint styled as the game styles its own)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -901,6 +901,8 @@ K.SIGN_STYLE_PARAM = "imsvaleSignStyle"
 -- player's lane work.) "Dedicated turn lanes" stays unticked by default.
 K.LANE_PARAM = "imsvaleOverwriteLanes"
 K.DEDICATED_PARAM = "imsvaleDedicatedTurnLanes"
+K.UNINSTALL_PARAM = "imsvaleUninstall"
+K.UNINSTALL_EVENT = "imsvale_road_priority_yield.uninstall" -- the Uninstall parameter's click, to the tool's recipe
 -- "Uninstall" (priority road 48, 2026-10-20): a window counts what the mod has placed in the save
 -- and offers to remove all of it (removeAll), so the mod can be disabled safely. Opened by a button
 -- under the construction menu's Settings window (in the icon overlay, priority road 91): a tool's
@@ -2103,37 +2105,10 @@ end
 local UninstallPresence -- (param { gameCtx }): defined with Uninstall below, mounted here
 local toggleUninstall -- (): opens or closes the Uninstall window; defined with Uninstall below
 
--- The construction menu's Settings window: where its bottom right corner is, as fractions of the
--- screen, while it's visible (nil otherwise). Placed by its stylesheet (Window!construct-settings,
--- ::/gui/construction/construction.css.lua): gravity { 1, 1 }, margin right 20, bottom 360. Taken
--- in screen pixels: no UI scale can be read (no API for it), and api.gui.byId.getSize gives
--- fractions of the screen, its frame and shadow included (420 x 536 px for a 400-wide window,
--- 2026-11-15), so it can't give one either (92 took it for pixels: the button ended off screen).
+-- The construction menu's Settings window (settingsHint). Its Uninstall button sat at its bottom
+-- right corner in 91-122 (settingsCorner); the button is a parameter in the panel now.
 K.SETTINGS_WINDOW_ID = "menu.construction.params.react"
-K.UNINSTALL_GAP = 4 -- pixels (at UI scale 1) between the Settings window and the Uninstall button
-local cornerLogged = nil -- what settingsCorner last logged (GUI module state; a test aid)
-local function settingsCorner()
-	local visible, okVis = false, false
-	okVis = pcall(function() visible = api.gui.byId.isVisible(K.SETTINGS_WINDOW_ID) end)
-	local size = api.gui.camera.getSize()
-	local w, h = math.max(size.x, 1), math.max(size.y, 1)
-	local sx, sy = nil, nil
-	pcall(function()
-		local s = api.gui.byId.getSize(K.SETTINGS_WINDOW_ID)
-		sx, sy = s and s.x, s and s.y
-	end)
-	-- 21: the window's visible right edge is 1 px further in than its stylesheet margin (in game,
-	-- 2026-11-15)
-	local cx, cy = (w - 21) / w, (h - 360 + K.UNINSTALL_GAP) / h
-	local line = string.format("uninstall button: settings visible %s (%s), size %s x %s, screen %d x %d -> %.3f, %.3f",
-		tostring(visible), okVis and "read" or "failed", tostring(sx), tostring(sy), w, h, cx, cy)
-	if line ~= cornerLogged then
-		cornerLogged = line
-		log("%s", line)
-	end
-	if not visible then return nil end
-	return cx, cy
-end
+
 -- The LB+Y key hint at the Settings window (a controller), where the game puts it for its own
 -- tools: the window adds a KeybindingHintDisplay for IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION to its own
 -- layout for each of the game's tools (construction.tl, ConstructionParamsWindow,
@@ -2206,8 +2181,8 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	local key = react.useState("")
 	react.onStep(function()
 		local parts = { tostring(configured.version), iconStyle }
-		local cx, cy = settingsCorner()
-		parts[#parts + 1] = cx and string.format("u%.4f,%.4f", cx, cy) or "u-"
+		local hx, hy = param.hintSource and settingsHint()
+		parts[#parts + 1] = hx and string.format("h%.4f,%.4f", hx, hy) or "h-"
 		for _, p in ipairs(layout()) do
 			parts[#parts + 1] = string.format("%.4f,%.4f,%d,%.2f", p.x, p.y, p.size, p.alpha)
 		end
@@ -2272,9 +2247,6 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 			item = UninstallPresence({ gameCtx = param.gameCtx }),
 		}
 	end
-	-- The Uninstall button, under the Settings window's bottom right corner (see toggleUninstall).
-	-- Not mouse-transparent, unlike the icons: it takes its clicks.
-	local cx, cy = settingsCorner()
 	-- The LB+Y hint (see settingsHint), with a controller only (hintSource).
 	do -- (diagnostics, 2026-11-16: the hint didn't show)
 		local hx, hy = nil, nil
@@ -2289,32 +2261,21 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	if param.hintSource then
 		local hx, hy = settingsHint()
 		if hx then
+			-- class and overflow mode as the game's own hints have them (construction.tl): without
+			-- the class a KeybindingHintDisplay has gravity { 0, 0 } (keybinding_hint.css.lua), and
+			-- the hint didn't show (priority road 122, placed right and with its source)
 			children[#children + 1] = builtin.FloatingLayoutChild{
 				localKey = "settingsHint",
 				h = hx,
 				v = hy,
+				overflowMode = builtin.type.FloatingLayoutOverflowMode.Overflow,
 				item = builtin.KeybindingHintDisplay{
-					meta = { styleSheet = styleutil.makeStyle{ anchorPoint = { 0.5, 1.0 } } },
+					meta = { class = "overflow-mode", styleSheet = styleutil.makeStyle{ anchorPoint = { 0.5, 1.0 } } },
 					source = param.hintSource,
 					inputAction = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION",
 				},
 			}
 		end
-	end
-	if cx and toggleUninstall then
-		children[#children + 1] = builtin.FloatingLayoutChild{
-			localKey = "uninstallButton",
-			h = cx,
-			v = cy,
-			item = builtin.Button{
-				meta = {
-					class = "imsvale-uninstall-proxy-button",
-					styleSheet = styleutil.makeStyle{ anchorPoint = { 1.0, 0.0 } },
-				},
-				content = builtin.TextView{ text = "Uninstall" },
-				onClick = function() toggleUninstall() end,
-			},
-		}
 	end
 	return builtin.FloatingLayout{ meta = { mouseTransparent = true }, children = children }
 end)
@@ -2587,11 +2548,11 @@ local function closeUninstall()
 	uninstall.open = false
 end
 
--- The Uninstall button (user, 2026-11-15): a tool's panel can't hold a plain button. In 87-90 it
--- was a frameless window of its own under the Settings window, but a window in front of the
--- Settings window blocked Back (Escape, right-click) while the tool was open, and Back never
--- reached that window's onClose. Now it's an element of the tool's icon overlay (IconOverlay),
--- outside the window stack, placed at the Settings window's bottom right corner (settingsCorner).
+-- The Uninstall button: a parameter in the tool's panel since priority road 123 (K.UNINSTALL_PARAM,
+-- under General), whose onChangeFn fires K.UNINSTALL_EVENT on every click; the tool's recipe
+-- answers it here. So a controller reaches it. Before: a checkbox (until 86), a frameless window
+-- under the Settings window (87-90: it blocked Back), an element of the icon overlay (91-122:
+-- out of a controller's reach, and placed in pixels, wrong at other resolutions and UI scales).
 toggleUninstall = function() uninstall.wanted = not uninstall.wanted end
 
 -- Mounted in the icon overlay for as long as the tool is in use. Each step: the Uninstall window
@@ -2722,6 +2683,10 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	-- tool's action stays mounted (its preview went on): there the tool counts as live while its
 	-- action is mounted. The menu's focus mode ("Action", "BottomBar", "Params": Y and LB+Y switch,
 	-- construction.tl) decides whether the tool or a settings panel has the controller.
+	react.onEvent(K.UNINSTALL_EVENT, function()
+		log("Uninstall: button")
+		toggleUninstall()
+	end)
 	local mounted = react.useState(false)
 	local focusMode = react.useState("Action")
 	local wantFocus = react.useRef(true)
@@ -3426,6 +3391,28 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				location = api.type.enum.ScriptParamLocation.Default,
 				preserveValueInAllCategories = true,
 				checkEnabledFn = inSection("general"),
+			},
+			{
+				-- A button: one value, and onChangeFn, which the menu calls on every click, value
+				-- changed or not (construction.tl changeParam; the road upgrade brush mod's Upgrade /
+				-- Clear work so). getDefinition may run apart from the tool's recipe (the brush's
+				-- note), so it fires an event, which the recipe answers (toggleUninstall).
+				group = K.UNINSTALL_PARAM,
+				key = K.UNINSTALL_PARAM,
+				name = "Uninstall",
+				values = { "Uninstall" },
+				defaultIndex = 1,
+				hideLabel = true,
+				resetOnCategoryChange = false,
+				uiType = api.type.enum.ScriptParamType.Button,
+				yearFrom = 0,
+				yearTo = 0,
+				location = api.type.enum.ScriptParamLocation.Default,
+				preserveValueInAllCategories = true,
+				checkEnabledFn = inSection("general"),
+				onChangeFn = function()
+					api.gui.fireReactEvent(K.UNINSTALL_EVENT, {})
+				end,
 			},
 			{
 				group = K.EXIT_PARAM,

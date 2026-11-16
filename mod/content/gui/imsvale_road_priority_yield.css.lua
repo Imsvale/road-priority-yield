@@ -64,15 +64,6 @@ function data()
 	a("Button!imsvale-uninstall-button:active", {
 		backgroundColor1 = color_util.getActiveFromRaw(colorDefault.AccentMedium),
 	})
-	-- The Uninstall button (priority road 91): an element of the tool's icon overlay, placed by the
-	-- tool at the Settings window's bottom right corner (settingsCorner). 87-90 put it in a window of
-	-- its own, which blocked Back while the tool was open.
-	-- The dimmer kind (user, 2026-11-15: it needn't stand out): the unselected toggle buttons'
-	-- BaseMedium, with the game's own hover border (Button:hover, builtin.css.lua).
-	a("Button!imsvale-uninstall-proxy-button", {
-		padding = { 6, 12, 6, 12 },
-		backgroundColor1 = colorDefault.BaseMedium,
-	})
 	a("TextView!imsvale-uninstall-section", {
 		margin = { 12, 0, 0, 0 },
 	})
