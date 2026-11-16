@@ -16,6 +16,20 @@ function data()
 		gravity = { -1.0, -1.0 },
 	})
 
+	-- The tool's button legend with a controller, as the game gives its own custom tools one
+	-- (::/gui/construction/construction.css.lua, R::IndustryGreenifyAction etc.). Without it the
+	-- tool showed no legend (priority road 117). Y (bottom bar) left out: the tool has nothing
+	-- there, and the menu goes straight back to the world.
+	a("!input-controller R::ConstructionDefinitionItem R::ImsvalePriorityRoadAction", {
+		actionPromptList = {
+			{ ia = "IA_MENU_BACK", text = _("Back") },
+			{ ia = "IA_APPLY", text = _("Apply / remove") },
+			{ ia = "IA_PRECISION_MODE", text = _("(Hold) One junction") },
+			{ ia = "IA_SECONDARY_MODE", text = _("(Hold) Whole road") },
+			{ ia = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", text = _("Settings") },
+		},
+	})
+
 	-- The priority sign settings window (DiamondSettingsWindow): padding inside, as the game's
 	-- popover windows have (::/gui/main/popover_react_util.css.lua), and fixed label and value
 	-- columns so the sliders line up. padding / margin: { top, right, bottom, left }.

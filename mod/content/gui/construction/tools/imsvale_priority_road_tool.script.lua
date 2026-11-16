@@ -58,7 +58,7 @@ local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 -- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
 local TEST_NO_OVERLAY = true
 local TEST_NO_PARAMS = false -- TEMPORARY (2026-11-16): the tool without settings (a test)
-local VERSION = "priority road 117 (checkboxes: No / Yes, for the controller drop-down; TEST: no overlay)"
+local VERSION = "priority road 118 (controller button legend; TEST: no overlay)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
