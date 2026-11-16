@@ -9,9 +9,9 @@
 -- −96%, and the ring never broke down (docs/notes.md).
 --
 -- Use: hover a road. The tool follows it through junctions in both directions, always to the
--- connected road that continues straightest (at most MAX_TURN off), until there is none, or
+-- connected road that continues straightest (at most K.MAX_TURN off), until there is none, or
 -- until it is back where it started: a loop. A loop that is round (every sample within
--- ROUND_TOLERANCE of the average radius) is a roundabout, anything else a priority road; the
+-- K.ROUND_TOLERANCE of the average radius) is a roundabout, anything else a priority road; the
 -- yielding is the same, only the label (and later the signs) differ. Blue: the priority road;
 -- red: the approaches that yield (gold: a road about to lose it). Click to apply to every
 -- junction on it; if they all have it already, click removes it (light preference Auto, type -1:
@@ -35,7 +35,7 @@
 --   road 44 a phase #3 for them).
 -- Junctions where no side road leads in (exits only) get no light.
 --
--- Lanes (opt-in; see LANE_PARAM): "Overwrite lanes" sets each junction's lanes by its plan's
+-- Lanes (opt-in; see K.LANE_PARAM): "Overwrite lanes" sets each junction's lanes by its plan's
 -- rule. Ordinary junctions: each turn lands in its own lane instead of fanning out into every lane
 -- of the road it turns into; "Dedicated turn lanes" on top of it makes turning lanes turn-only
 -- where another lane still goes straight on. Roundabouts: their own rule (roundaboutLanes: the
@@ -57,8 +57,11 @@ local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
 -- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
 local TEST_NO_OVERLAY = true
-local VERSION = "priority road 112 (TEST: no overlay; gamepad crosshair; focus diagnostics)"
+local VERSION = "priority road 113 (constants in K: under the locals limit; TEST: no overlay; gamepad crosshair)"
 local CT = api.type.ComponentType
+-- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
+-- priority road 112 failed to load, "too many local variables", at 199).
+local K = {}
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
 local phases = ug_require "/scripts/imsvale_yield_phases.lua"
@@ -67,36 +70,36 @@ local phases = ug_require "/scripts/imsvale_yield_phases.lua"
 local devOk, dev = pcall(ug_require, "/scripts/imsvale_yield_dev.lua")
 if not devOk or type(dev) ~= "table" then dev = {} end
 local PLANS = phases.PLANS
-local MAX_TURN = 45            -- degrees: how far the priority road may bend at a junction
-local ROUND_TOLERANCE = 0.12   -- a loop is a roundabout if every sample is within 12 % of the mean radius
-local MAX_SEGMENTS = 400       -- stop following a road after this many segments
-local LIGHT_TYPE = "imsvale_yield_invisible" -- matched against the light type resource names
+K.MAX_TURN = 45            -- degrees: how far the priority road may bend at a junction
+K.ROUND_TOLERANCE = 0.12   -- a loop is a roundabout if every sample is within 12 % of the mean radius
+K.MAX_SEGMENTS = 400       -- stop following a road after this many segments
+K.LIGHT_TYPE = "imsvale_yield_invisible" -- matched against the light type resource names
 -- The road lines drawn while hovering (user, 2026-10-21; compared with the game's road tool on
 -- screenshots): as wide as the game's highlight of a hovered road, half opaque.
-local LINE_WIDTH = 3.06         -- all three lines
-local LINE_ALPHA = 0.5          -- opacity of all three lines
-local LINE_PRIORITY = constructionColors.Modifier.Valid    -- the priority road: the game's blue
-local LINE_YIELD = { 170 / 255, 45 / 255, 40 / 255 }       -- the roads that yield: a dull red
-local LINE_REMOVE = constructionColors.Bulldozer           -- a road about to lose priority: the game's gold
+K.LINE_WIDTH = 3.06         -- all three lines
+K.LINE_ALPHA = 0.5          -- opacity of all three lines
+K.LINE_PRIORITY = constructionColors.Modifier.Valid    -- the priority road: the game's blue
+K.LINE_YIELD = { 170 / 255, 45 / 255, 40 / 255 }       -- the roads that yield: a dull red
+K.LINE_REMOVE = constructionColors.Bulldozer           -- a road about to lose priority: the game's gold
 
 -- Icons, drawn on screen at each approach's junction edge (see IconOverlay): on every junction
 -- already configured with this mod, and the hovered road's preview.
-local ICON_BACK = 6.0          -- metres back from the junction edge along the approach
-local END_SPREAD = 10.0        -- metres: lane ends further than this beyond the nearest one at a junction
+K.ICON_BACK = 6.0          -- metres back from the junction edge along the approach
+K.END_SPREAD = 10.0        -- metres: lane ends further than this beyond the nearest one at a junction
                                -- edge are pieces along the road, not the edge (approachPoint)
-local ICON_LIFT = 1.5          -- metres above the road
-local ICON_SIZE = 32           -- pixels at ICON_REF_DISTANCE from the camera
-local ICON_REF_DISTANCE = 150  -- metres
-local ICON_TAPER = 0.5         -- how fast icons shrink with distance: size ~ (ICON_REF_DISTANCE / distance) ^ this
+K.ICON_LIFT = 1.5          -- metres above the road
+K.ICON_SIZE = 32           -- pixels at K.ICON_REF_DISTANCE from the camera
+K.ICON_REF_DISTANCE = 150  -- metres
+K.ICON_TAPER = 0.5         -- how fast icons shrink with distance: size ~ (K.ICON_REF_DISTANCE / distance) ^ this
                                -- (1 shrank them too fast; 0.5 is half the rate on a log scale, user 2026-10-19)
-local ICON_MIN_SIZE = 14       -- pixels
-local ICON_MAX_SIZE = 48       -- pixels
-local RANGE_MIN = 250          -- metres from the camera's centre (horizontally) where icons always show
-local RANGE_PER_HEIGHT = 6     -- the range grows with the camera's height: max(RANGE_MIN, height * this)
-local FADE_FROM = 0.7          -- icons fade out from this share of the range to its end, then hide
-local REPLACED_SHIFT = 0.6     -- a replaced icon and its replacement sit this many icon widths left / right
-local MAX_ICONS = 300          -- icons drawn at most
-local CONFIGURED_REFRESH = 3.0 -- seconds between scans for configured junctions
+K.ICON_MIN_SIZE = 14       -- pixels
+K.ICON_MAX_SIZE = 48       -- pixels
+K.RANGE_MIN = 250          -- metres from the camera's centre (horizontally) where icons always show
+K.RANGE_PER_HEIGHT = 6     -- the range grows with the camera's height: max(K.RANGE_MIN, height * this)
+K.FADE_FROM = 0.7          -- icons fade out from this share of the range to its end, then hide
+K.REPLACED_SHIFT = 0.6     -- a replaced icon and its replacement sit this many icon widths left / right
+K.MAX_ICONS = 300          -- icons drawn at most
+K.CONFIGURED_REFRESH = 3.0 -- seconds between scans for configured junctions
 local ICONS = {
 	priority = "imsvale_road_priority_yield::/gui/priority-diamond.tga",
 	yield = "imsvale_road_priority_yield::/gui/yield.tga",
@@ -118,10 +121,10 @@ end
 local iconStyle = "intl"
 -- An icon that goes away is marked with the bulldozer's look: a box of translucent gold with a
 -- stronger gold outline, in the game's own Bulldozer colour.
-local HIGHLIGHT_FILL = 0.35    -- opacity of the highlight's fill
-local HIGHLIGHT_BORDER = 0.9   -- opacity of its outline
-local HIGHLIGHT_WIDTH = 2      -- outline width, pixels
-local HIGHLIGHT_PAD = 1.2      -- box size relative to the icon
+K.HIGHLIGHT_FILL = 0.35    -- opacity of the highlight's fill
+K.HIGHLIGHT_BORDER = 0.9   -- opacity of its outline
+K.HIGHLIGHT_WIDTH = 2      -- outline width, pixels
+K.HIGHLIGHT_PAD = 1.2      -- box size relative to the icon
 
 local function log(fmt, ...)
 	local args = { ... }
@@ -157,12 +160,12 @@ local function leaving(seg, node)
 end
 
 -- Where an approach meets the junction: the mean of its lane curves' ends at `node` (a
--- segment's lanes stop at the junction's edge), moved ICON_BACK out along the road.
+-- segment's lanes stop at the junction's edge), moved K.ICON_BACK out along the road.
 local function approachPoint(seg, node)
 	local tn = api.engine.getComponent(seg, CT.TRANSPORT_NETWORK)
 	local np = api.engine.getComponent(node, CT.BASE_NODE).position
 	local calc = api.engine.util.transport.calcPosition
-	-- Each lane edge's end nearer the node; then only those within END_SPREAD of the nearest one: a
+	-- Each lane edge's end nearer the node; then only those within K.END_SPREAD of the nearest one: a
 	-- road whose lanes come in pieces along the segment (bus lanes, presumably) has pieces whose
 	-- nearer end is far from the node, which pulled the point out into the road (2026-11-15, a yield
 	-- sign far from junction 669).
@@ -177,13 +180,13 @@ local function approachPoint(seg, node)
 	end
 	local sx, sy, sz, n = 0, 0, 0, 0
 	for _, x in ipairs(ends) do
-		if x.dist <= nearest + END_SPREAD then
+		if x.dist <= nearest + K.END_SPREAD then
 			sx, sy, sz, n = sx + x.p.x, sy + x.p.y, sz + x.p.z, n + 1
 		end
 	end
 	if n == 0 then return nil end
 	local d = leaving(seg, node)
-	return { x = sx / n + d.x * ICON_BACK, y = sy / n + d.y * ICON_BACK, z = sz / n }
+	return { x = sx / n + d.x * K.ICON_BACK, y = sy / n + d.y * K.ICON_BACK, z = sz / n }
 end
 
 -- The centre of an approach where it meets the junction (the mean of its lane curves' ends at
@@ -193,7 +196,7 @@ local function junctionEdge(seg, node)
 	local p = approachPoint(seg, node)
 	if not p then return nil end
 	local d = leaving(seg, node)
-	return { x = p.x - d.x * ICON_BACK, y = p.y - d.y * ICON_BACK, z = p.z }, d
+	return { x = p.x - d.x * K.ICON_BACK, y = p.y - d.y * K.ICON_BACK, z = p.z }, d
 end
 
 -- Roles of a configured junction's approaches, read from its phases: a segment with a
@@ -233,11 +236,11 @@ end
 local function walk(seg, node, stopAt, visited)
 	local segs, nodes = {}, {}
 	local current = seg
-	for _ = 1, MAX_SEGMENTS do
+	for _ = 1, K.MAX_SEGMENTS do
 		local arrive = leaving(current, node)
 		arrive = { x = -arrive.x, y = -arrive.y } -- direction of travel into the node
 		local joined, known = connections(node)
-		local best, bestTurn, bestFar = nil, MAX_TURN, nil
+		local best, bestTurn, bestFar = nil, K.MAX_TURN, nil
 		for _, cand in ipairs(api.engine.system.streetSystem.getNodeStreetSegments(node)) do
 			if cand ~= current and (not known or joined[current .. ">" .. cand] or joined[cand .. ">" .. current]) then
 				local d, far = leaving(cand, node)
@@ -262,7 +265,7 @@ end
 local function stretchFrom(seg, node)
 	local path, cur = { seg }, seg
 	local _, far = leaving(seg, node)
-	for _ = 1, MAX_SEGMENTS do
+	for _ = 1, K.MAX_SEGMENTS do
 		local around = {}
 		for _, s in ipairs(api.engine.system.streetSystem.getNodeStreetSegments(far)) do around[#around + 1] = s end
 		if #around ~= 2 then break end
@@ -284,7 +287,7 @@ local function hermite(p0, p1, t0, t1, s)
 	}
 end
 
--- Round: every sample along the loop within ROUND_TOLERANCE of the mean distance from the
+-- Round: every sample along the loop within K.ROUND_TOLERANCE of the mean distance from the
 -- centroid. Returns round, mean radius, largest relative deviation.
 local function roundness(segs)
 	local pts = {}
@@ -301,7 +304,7 @@ local function roundness(segs)
 	end
 	local worst = 0
 	for _, r in ipairs(radii) do worst = math.max(worst, math.abs(r - mean) / mean) end
-	return worst <= ROUND_TOLERANCE, mean, worst
+	return worst <= K.ROUND_TOLERANCE, mean, worst
 end
 
 ---------------------------------------------------------------------------
@@ -315,13 +318,13 @@ local function invisibleType()
 	local ok, all = pcall(function() return rep.getAll(true) end)
 	if ok and type(all) == "table" then
 		for id, name in pairs(all) do
-			if tostring(name):find(LIGHT_TYPE, 1, true) then lightTypeId = id return id end
+			if tostring(name):find(K.LIGHT_TYPE, 1, true) then lightTypeId = id return id end
 		end
 	end
 	for id in pairs(rep.getAll()) do
 		local t = rep.get(id)
 		local file = t and t.modelScript and tostring(t.modelScript.fileName) or ""
-		if file:find(LIGHT_TYPE, 1, true) then lightTypeId = id return id end
+		if file:find(K.LIGHT_TYPE, 1, true) then lightTypeId = id return id end
 	end
 	return nil
 end
@@ -333,16 +336,16 @@ end
 -- (2026-10-20). -1 doesn't: Uninstall, mod disabled, road upgraded at a former junction, the
 -- game's usual lights there (user's test, 2026-10-22). Priority road 48-64 used the climate's
 -- Type A instead, found by name and climate category.
-local TAKEN_OFF_TYPE = -1
+K.TAKEN_OFF_TYPE = -1
 -- And its preference: AUTO, as at a junction the game manages itself, so taking ours off resets
 -- the junction with no further assumptions: the game puts its own light there where the roads
 -- call for one (user, 2026-10-22; until priority road 66 it was NO, never a light).
-local TAKEN_OFF_PREFERENCE = api.type.enum.TrafficLightPreference.AUTO
+K.TAKEN_OFF_PREFERENCE = api.type.enum.TrafficLightPreference.AUTO
 -- The preference to leave at a node we take our type off where the light may be gone already:
 -- AUTO while our light is still on; where the player switched it off (no light, our type still
 -- stored), theirs, or the game would put a light back that they removed.
 local function takenOffPreference(node, cfg)
-	if api.engine.getComponent(node, CT.BASE_NODE_TRAFFIC_LIGHT) then return TAKEN_OFF_PREFERENCE end
+	if api.engine.getComponent(node, CT.BASE_NODE_TRAFFIC_LIGHT) then return K.TAKEN_OFF_PREFERENCE end
 	return cfg.trafficLightPreference
 end
 
@@ -820,8 +823,8 @@ local function apply(plan, done, lanes, onJob)
 			if j.removeHere then
 				local tl = cfg.trafficLightConfig:clone()
 				tl.states = {}
-				tl.trafficLightType = TAKEN_OFF_TYPE
-				jobs[#jobs + 1] = { node = j.node, tl = tl, pref = TAKEN_OFF_PREFERENCE, remove = true }
+				tl.trafficLightType = K.TAKEN_OFF_TYPE
+				jobs[#jobs + 1] = { node = j.node, tl = tl, pref = K.TAKEN_OFF_PREFERENCE, remove = true }
 			end
 		elseif j.states then
 			local tl = cfg.trafficLightConfig:clone()
@@ -886,51 +889,51 @@ end
 -- the game; game_mechanics/imsvale_yield_signs) and removed by id. Best effort: a sign that
 -- fails is logged, it never undoes the yielding. Signs bulldozed by hand just drop out.
 
--- Sign style: the drop-down SIGN_STYLE_PARAM ("Sign style": International / Norwegian) in the
+-- Sign style: the drop-down K.SIGN_STYLE_PARAM ("Sign style": International / Norwegian) in the
 -- construction menu's parameter list, read with getCurrentParams(). That function returns the menu's
 -- own parameters only: as a Toolbar parameter it read back nil (2026-10-18). Values are the 1-based
 -- index of the chosen entry (the game's getParamDefaultValue returns defaultIndex as is). Changing
 -- it while the tool is open restyles every junction's signs (restyleAll).
-local SIGN_STYLE_PARAM = "imsvaleSignStyle"
+K.SIGN_STYLE_PARAM = "imsvaleSignStyle"
 -- Lane settings (see the header): checkboxes (a Yes / No setting is most compact as a checkbox,
 -- user 2026-10-19): read 1 = unticked, 2 = ticked. "Overwrite lanes" is ticked by default since
 -- priority road 96 (user, 2026-11-15): a new player applies the tool without looking at its
 -- settings, and with the game's lanes the yielding doesn't have the effect they expect; players
 -- who care about their own lanes untick it. (Until 95 it was opt-in, so as never to lose a
 -- player's lane work.) "Dedicated turn lanes" stays unticked by default.
-local LANE_PARAM = "imsvaleOverwriteLanes"
-local DEDICATED_PARAM = "imsvaleDedicatedTurnLanes"
+K.LANE_PARAM = "imsvaleOverwriteLanes"
+K.DEDICATED_PARAM = "imsvaleDedicatedTurnLanes"
 -- "Uninstall" (priority road 48, 2026-10-20): a window counts what the mod has placed in the save
 -- and offers to remove all of it (removeAll), so the mod can be disabled safely. Opened by a button
 -- under the construction menu's Settings window (in the icon overlay, priority road 91): a tool's
 -- panel can't hold a plain button (../docs/GUI.md); until 86 it was a checkbox there.
 -- Tabs (user, 2026-10-19), as the game's road tool switches its panel with icon buttons at the
--- top: SECTION_PARAM picks General / Roundabouts / Priority signs, and every other parameter is
+-- top: K.SECTION_PARAM picks General / Roundabouts / Priority signs, and every other parameter is
 -- shown only under its tab (checkEnabledFn returning "Hidden", as the game's street builder
 -- hides parameters by mode, construction_react_util.tl).
-local SECTION_PARAM = "imsvaleSection"
-local SECTIONS = { general = 1, roundabout = 2, priority = 3 }
+K.SECTION_PARAM = "imsvaleSection"
+K.SECTIONS = { general = 1, roundabout = 2, priority = 3 }
 local function inSection(section)
 	return function(values)
-		return (values[SECTION_PARAM] or 1) == SECTIONS[section] and "Enabled" or "Hidden"
+		return (values[K.SECTION_PARAM] or 1) == K.SECTIONS[section] and "Enabled" or "Hidden"
 	end
 end
 -- "Roundabout exit": Style A (default) / Style B, see roundaboutLanes. The tooltips name the
 -- right lane: with left-hand traffic support they must say "left" instead.
-local EXIT_PARAM = "imsvaleRoundaboutExit"
-local SIGN_STYLES = { "intl", "no" }          -- by parameter index; "no": Norwegian, tighter corners
-local SIGN_BACK = 0.5          -- metres back from the junction edge along the approach (3 m stood
+K.EXIT_PARAM = "imsvaleRoundaboutExit"
+K.SIGN_STYLES = { "intl", "no" }          -- by parameter index; "no": Norwegian, tighter corners
+K.SIGN_BACK = 0.5          -- metres back from the junction edge along the approach (3 m stood
                                -- 2-3 m too far back on a 16 m town road, 2026-10-18)
-local CLEAR_RAISED = 0.5       -- metres past the curb onto a raised sidewalk
-local CLEAR_LEVEL = 1.0        -- metres past the curb where there is no raised sidewalk (a level
+K.CLEAR_RAISED = 0.5       -- metres past the curb onto a raised sidewalk
+K.CLEAR_LEVEL = 1.0        -- metres past the curb where there is no raised sidewalk (a level
                                -- pedestrian strip, a shoulder's edge, or nothing)
-local SIGN_YEAR = 1950         -- no signs before this game year (signsAllowed; user, 2026-11-07)
-local SHORT_LINK = 15          -- metres, junction edge to junction edge: an approach this short from
+K.SIGN_YEAR = 1950         -- no signs before this game year (signsAllowed; user, 2026-11-07)
+K.SHORT_LINK = 15          -- metres, junction edge to junction edge: an approach this short from
                                -- another junction (a dual carriageway's median crossing) gets no yield
                                -- sign; the two read as one junction (user, 2026-11-15)
-local SIGN_GAME_SCRIPT = "imsvale_road_priority_yield::/game_mechanics/imsvale_yield_signs/imsvale_yield_signs.gs"
-local SIGN_EVENT_ID = "imsvale_road_priority_yield"
-local SIGN_EVENT_NAME = "imsvale_yield_signs.set"
+K.SIGN_GAME_SCRIPT = "imsvale_road_priority_yield::/game_mechanics/imsvale_yield_signs/imsvale_yield_signs.gs"
+K.SIGN_EVENT_ID = "imsvale_road_priority_yield"
+K.SIGN_EVENT_NAME = "imsvale_yield_signs.set"
 
 -- Registered construction names by file name ("imsvale_yield_sign.con" etc.).
 local signConNames = {}
@@ -944,7 +947,7 @@ end
 -- Stored sign ids per junction node (string keys), read from the game script's state.
 local function storedSigns()
 	local ok, signs = pcall(function()
-		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(SIGN_GAME_SCRIPT)
+		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(K.SIGN_GAME_SCRIPT)
 		local comp = entity and api.engine.getComponent(entity, CT.GAME_SCRIPT)
 		local state = comp and comp.state
 		return type(state) == "table" and state.signs or nil
@@ -960,7 +963,7 @@ local function storedSigns()
 end
 
 local function storeSigns(node, ids, style, round)
-	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME,
+	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(K.SIGN_GAME_SCRIPT, K.SIGN_EVENT_ID, K.SIGN_EVENT_NAME,
 		{ node = node, signs = ids, style = style, round = round or false }))
 end
 
@@ -985,7 +988,7 @@ local function registerJunction(job, settings)
 			ph = phases.phaseFingerprint(cfg.laneConnections, cfg.crosswalks, cfg.trafficLightConfig.states) }
 	end
 	param.kind = "junction"
-	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, param))
+	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(K.SIGN_GAME_SCRIPT, K.SIGN_EVENT_ID, K.SIGN_EVENT_NAME, param))
 end
 
 -- left: left-hand traffic, where the roundabout sign's arrows go clockwise (its own model, sharing
@@ -1149,16 +1152,16 @@ local function currentYear()
 	return year
 end
 
--- Signs only from SIGN_YEAR: earlier, modern road signs look out of place (user, 2026-11-07, a
+-- Signs only from K.SIGN_YEAR: earlier, modern road signs look out of place (user, 2026-11-07, a
 -- game started in 1900). The yielding itself works in any year. These shapes were standardised
 -- internationally after the Second World War (1949 Geneva protocol on road signs) and common by
 -- the 1950s (general knowledge, not checked against a source).
 local function signsAllowed()
 	local year = currentYear()
-	return year == nil or year >= SIGN_YEAR
+	return year == nil or year >= K.SIGN_YEAR
 end
 
--- Where a sign stands for traffic coming in on `seg` towards `node`: SIGN_BACK back from the
+-- Where a sign stands for traffic coming in on `seg` towards `node`: K.SIGN_BACK back from the
 -- junction edge (the approach's lanes end there, so bigger junctions push it out by themselves),
 -- on the side that traffic keeps to (right, or left where the roads say so: keepsLeft) just past
 -- the curb, facing the traffic (the model's face is its -Y).
@@ -1167,13 +1170,13 @@ local function signTransf(seg, node, left)
 	if not edge then return nil end
 	local e = api.engine.getComponent(seg, CT.BASE_EDGE)
 	local outer, raised, width = curb(e.laneConfigs)
-	local lateral = outer + (raised and CLEAR_RAISED or CLEAR_LEVEL)
+	local lateral = outer + (raised and K.CLEAR_RAISED or K.CLEAR_LEVEL)
 	log("sign on segment %d at node %d: road %.1f m, curb %.1f m from the centre, raised sidewalk %s -> %.1f m%s",
 		seg, node, width, outer, tostring(raised), lateral, left and ", left-hand traffic" or "")
 	-- the traffic's right (it heads -d, towards the node), or its left
 	local side = left and { x = d.y, y = -d.x } or { x = -d.y, y = d.x }
-	local x = edge.x + d.x * SIGN_BACK + side.x * lateral
-	local y = edge.y + d.y * SIGN_BACK + side.y * lateral
+	local x = edge.x + d.x * K.SIGN_BACK + side.x * lateral
+	local y = edge.y + d.y * K.SIGN_BACK + side.y * lateral
 	local angle = (math.atan2 or math.atan)(d.x, -d.y)
 	return api.type.Mat4f.rotZTransl(angle, api.type.Vec3f.new(x, y, edge.z))
 end
@@ -1230,7 +1233,7 @@ local function placeSigns(node, segs, style, round, done)
 	-- One approach's signs.
 	local function approach(seg)
 		local okLen, len = pcall(linkLength, seg)
-		if okLen and len and len < SHORT_LINK then
+		if okLen and len and len < K.SHORT_LINK then
 			log("no sign on segment %d at node %d: %.1f m to the next junction", seg, node, len)
 			return
 		end
@@ -1275,7 +1278,7 @@ end
 local function updateSigns(plan, style)
 	local stored = storedSigns()
 	local allowed = plan.remove or signsAllowed()
-	if not allowed then log("signs: none before %d", SIGN_YEAR) end
+	if not allowed then log("signs: none before %d", K.SIGN_YEAR) end
 	for _, j in ipairs(plan.junctions) do
 		local key = tostring(j.node)
 		local old = stored[key]
@@ -1337,31 +1340,31 @@ end
 -- previous junction's edge, or the road's start), gap = the stretch's visible length to the next
 -- junction's edge or the road's end; +- jitter, fixed per node from its id, kept inside the stretch.
 -- - start: where the priority road begins (each end, for traffic driving onto it), always;
--- - repeat: after every junction, unless the stretch ahead is shorter than DIAMOND_MIN_GAP: a run
+-- - repeat: after every junction, unless the stretch ahead is shorter than K.DIAMOND_MIN_GAP: a run
 --   of close junctions gets one sign, after its last junction.
 -- Not on roundabouts. No end-of-priority signs: the game has no right-hand rule to return to.
 -- Stored per node in the game script, apart from the yield signs (the style switch leaves them
 -- alone): repeats under their junction, start signs under the road's end node.
-local DIAMOND_FILE = "imsvale_priority_sign.con"
-local DIAMOND_SPACING = 60.0     -- metres from the start of the stretch (halfway on a stretch under twice this)
-local DIAMOND_JITTER = 2.0       -- +- metres, fixed per node
-local DIAMOND_MIN_GAP = 60.0     -- a stretch shorter than this gets no repeat sign (a 90 m block is
+K.DIAMOND_FILE = "imsvale_priority_sign.con"
+K.DIAMOND_SPACING = 60.0     -- metres from the start of the stretch (halfway on a stretch under twice this)
+K.DIAMOND_JITTER = 2.0       -- +- metres, fixed per node
+K.DIAMOND_MIN_GAP = 60.0     -- a stretch shorter than this gets no repeat sign (a 90 m block is
                                  -- very roughly 60 m of road between junction edges, user)
-local DIAMOND_STEP = 2.0         -- metres between samples of the road's curve
+K.DIAMOND_STEP = 2.0         -- metres between samples of the road's curve
 
 -- Priority sign settings: sliders under the tool's Priority signs tab (user, 2026-10-19; they were
 -- in a window of their own first, see ../docs/GUI.md). The DIAMOND_* values above are the
 -- defaults. Panel values are GUI session state: they last while the game runs, not with a save
 -- (a tool can't set its panel values, so a saved value couldn't be shown). The tool reads them
 -- every step into panelDiamonds; placement reads that. A change that has settled rebuilds every
--- road's signs (DIAMOND_REBUILD_STEPS).
+-- road's signs (K.DIAMOND_REBUILD_STEPS).
 local DIAMOND_SETTINGS = {
-	{ key = "spacing", name = "Spacing", default = DIAMOND_SPACING, min = 10, max = 200, step = 5 },
-	{ key = "jitter", name = "Variation", default = DIAMOND_JITTER, min = 0, max = 20, step = 1 },
-	{ key = "minGap", name = "Minimum segment length", default = DIAMOND_MIN_GAP, min = 0, max = 300, step = 5 },
+	{ key = "spacing", name = "Spacing", default = K.DIAMOND_SPACING, min = 10, max = 200, step = 5 },
+	{ key = "jitter", name = "Variation", default = K.DIAMOND_JITTER, min = 0, max = 20, step = 1 },
+	{ key = "minGap", name = "Minimum segment length", default = K.DIAMOND_MIN_GAP, min = 0, max = 300, step = 5 },
 }
 for _, d in ipairs(DIAMOND_SETTINGS) do d.param = "imsvaleDiamond_" .. d.key end
-local DIAMOND_REBUILD_STEPS = 90 -- GUI steps a changed setting must stay put before signs are rebuilt (~1.5 s)
+K.DIAMOND_REBUILD_STEPS = 90 -- GUI steps a changed setting must stay put before signs are rebuilt (~1.5 s)
 
 local panelDiamonds = nil -- the sliders' values, read by the tool every step (GUI module state)
 
@@ -1403,7 +1406,7 @@ end
 
 local function storedDiamonds()
 	local ok, d = pcall(function()
-		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(SIGN_GAME_SCRIPT)
+		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(K.SIGN_GAME_SCRIPT)
 		local comp = entity and api.engine.getComponent(entity, CT.GAME_SCRIPT)
 		local state = comp and comp.state
 		return type(state) == "table" and state.diamonds or nil
@@ -1413,7 +1416,7 @@ end
 
 -- sig: where the signs stand (see updateDiamonds), stored with them.
 local function storeDiamonds(node, ids, sig)
-	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME,
+	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(K.SIGN_GAME_SCRIPT, K.SIGN_EVENT_ID, K.SIGN_EVENT_NAME,
 		{ kind = "diamonds", node = node, ids = ids, sig = sig }))
 end
 
@@ -1452,7 +1455,7 @@ local function sampleChain(segs, nodes)
 		local forward = e.node0 == nodes[i]
 		local len = e.distance and e.distance > 0 and e.distance
 			or math.sqrt((e.position1.x - e.position0.x) ^ 2 + (e.position1.y - e.position0.y) ^ 2)
-		local n = math.max(2, math.ceil(len / DIAMOND_STEP))
+		local n = math.max(2, math.ceil(len / K.DIAMOND_STEP))
 		local prev = nil
 		for k = 0, n do
 			local u = k / n
@@ -1491,7 +1494,7 @@ local function diamondTransf(pts, s, dir, left)
 	if not p then return nil end
 	local h = { x = t.x * dir, y = t.y * dir }
 	local outer, raised = curb(api.engine.getComponent(seg, CT.BASE_EDGE).laneConfigs)
-	local lateral = outer + (raised and CLEAR_RAISED or CLEAR_LEVEL)
+	local lateral = outer + (raised and K.CLEAR_RAISED or K.CLEAR_LEVEL)
 	if left then lateral = -lateral end
 	local x, y = p.x + h.y * lateral, p.y - h.x * lateral
 	local angle = (math.atan2 or math.atan)(-h.x, h.y)
@@ -1612,7 +1615,7 @@ local function updateDiamonds(plan)
 	if plan.round then return end
 	local stored = storedDiamonds()
 	local places, pts, nodes, keys = diamondPlaces(plan)
-	-- No signs before SIGN_YEAR: none wanted, so any left over go and none are placed.
+	-- No signs before K.SIGN_YEAR: none wanted, so any left over go and none are placed.
 	if not plan.remove and not signsAllowed() then places = {} end
 	-- membersOnly (a sign check around a new junction): signs only on links that belong to the
 	-- applied road, not on road the tool's following now runs on into (2026-11-15).
@@ -1697,7 +1700,7 @@ local function updateDiamonds(plan)
 			kept = kept + #w.transfs
 		else
 			count = count + #w.transfs
-			placeAt(w.transfs, DIAMOND_FILE, "Priority sign", "diamonds at " .. key, function(ids)
+			placeAt(w.transfs, K.DIAMOND_FILE, "Priority sign", "diamonds at " .. key, function(ids)
 				storeDiamonds(key, ids, w.sig)
 			end)
 		end
@@ -1985,7 +1988,7 @@ local lastLog = nil -- plans are worked out on every redraw: log one only when i
 local redoRoadDiamonds -- (roads, membersOnly): defined with the road edits below
 
 -- Configured junctions (light type = ours) and their icons, rescanned every
--- CONFIGURED_REFRESH seconds and right after an apply / remove. GUI module state persists for
+-- K.CONFIGURED_REFRESH seconds and right after an apply / remove. GUI module state persists for
 -- the session. getEntitiesWithComponent can't loop over traffic lights, so scan the street
 -- node map.
 local configured = { time = nil, version = 0, junctions = {} }
@@ -2039,7 +2042,7 @@ end
 
 local function refreshConfigured()
 	local now = api.util.getApplicationTime()
-	if configured.time and now - configured.time < CONFIGURED_REFRESH then return end
+	if configured.time and now - configured.time < K.CONFIGURED_REFRESH then return end
 	configured.time = now
 	configured.version = configured.version + 1
 	local typeId = invisibleType()
@@ -2091,7 +2094,7 @@ end
 --   collapsed at the left edge and the icons piled up there (2026-10-17).
 -- - Every element is mouse-transparent (meta.mouseTransparent; react.setMouseTransparent only
 --   covers the recipe's own component): hovering an image made the tool flicker (2026-10-17).
--- - Size falls with the distance from the camera (ICON_SIZE at ICON_REF_DISTANCE, ICON_TAPER, clamped).
+-- - Size falls with the distance from the camera (K.ICON_SIZE at K.ICON_REF_DISTANCE, K.ICON_TAPER, clamped).
 --   Icons further from the camera's centre than the range (which grows with the camera's
 --   height) are hidden, and fade out before that, so close in the horizon stays clear.
 -- - An icon that goes away gets a second element at the same place, drawn on top: the
@@ -2108,22 +2111,22 @@ local toggleUninstall -- (): opens or closes the Uninstall window; defined with 
 -- in screen pixels: no UI scale can be read (no API for it), and api.gui.byId.getSize gives
 -- fractions of the screen, its frame and shadow included (420 x 536 px for a 400-wide window,
 -- 2026-11-15), so it can't give one either (92 took it for pixels: the button ended off screen).
-local SETTINGS_WINDOW_ID = "menu.construction.params.react"
-local UNINSTALL_GAP = 4 -- pixels (at UI scale 1) between the Settings window and the Uninstall button
+K.SETTINGS_WINDOW_ID = "menu.construction.params.react"
+K.UNINSTALL_GAP = 4 -- pixels (at UI scale 1) between the Settings window and the Uninstall button
 local cornerLogged = nil -- what settingsCorner last logged (GUI module state; a test aid)
 local function settingsCorner()
 	local visible, okVis = false, false
-	okVis = pcall(function() visible = api.gui.byId.isVisible(SETTINGS_WINDOW_ID) end)
+	okVis = pcall(function() visible = api.gui.byId.isVisible(K.SETTINGS_WINDOW_ID) end)
 	local size = api.gui.camera.getSize()
 	local w, h = math.max(size.x, 1), math.max(size.y, 1)
 	local sx, sy = nil, nil
 	pcall(function()
-		local s = api.gui.byId.getSize(SETTINGS_WINDOW_ID)
+		local s = api.gui.byId.getSize(K.SETTINGS_WINDOW_ID)
 		sx, sy = s and s.x, s and s.y
 	end)
 	-- 21: the window's visible right edge is 1 px further in than its stylesheet margin (in game,
 	-- 2026-11-15)
-	local cx, cy = (w - 21) / w, (h - 360 + UNINSTALL_GAP) / h
+	local cx, cy = (w - 21) / w, (h - 360 + K.UNINSTALL_GAP) / h
 	local line = string.format("uninstall button: settings visible %s (%s), size %s x %s, screen %d x %d -> %.3f, %.3f",
 		tostring(visible), okVis and "read" or "failed", tostring(sx), tostring(sy), w, h, cx, cy)
 	if line ~= cornerLogged then
@@ -2150,20 +2153,20 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 		local size = cam.getSize()
 		local w, h = math.max(size.x, 1), math.max(size.y, 1)
 		local eye, centre = cam.getEye(), cam.getCenter()
-		local range = math.max(RANGE_MIN, (cam.getHeightAboveTerrain() or 0) * RANGE_PER_HEIGHT)
+		local range = math.max(K.RANGE_MIN, (cam.getHeightAboveTerrain() or 0) * K.RANGE_PER_HEIGHT)
 		local placed = {}
 		for _, ic in ipairs(icons) do
-			if #placed >= MAX_ICONS then break end
+			if #placed >= K.MAX_ICONS then break end
 			local horizontal = math.sqrt((ic.x - centre.x) ^ 2 + (ic.y - centre.y) ^ 2)
 			if horizontal <= range then
-				local z = ic.z + ICON_LIFT
+				local z = ic.z + K.ICON_LIFT
 				local dist = math.sqrt((ic.x - eye.x) ^ 2 + (ic.y - eye.y) ^ 2 + (z - eye.z) ^ 2)
-				local scaled = ICON_SIZE * (ICON_REF_DISTANCE / math.max(dist, 1)) ^ ICON_TAPER
-				local px = math.floor(math.max(ICON_MIN_SIZE, math.min(ICON_MAX_SIZE, scaled)) + 0.5)
-				local alpha = horizontal <= range * FADE_FROM and 1 or (range - horizontal) / (range * (1 - FADE_FROM))
+				local scaled = K.ICON_SIZE * (K.ICON_REF_DISTANCE / math.max(dist, 1)) ^ K.ICON_TAPER
+				local px = math.floor(math.max(K.ICON_MIN_SIZE, math.min(K.ICON_MAX_SIZE, scaled)) + 0.5)
+				local alpha = horizontal <= range * K.FADE_FROM and 1 or (range - horizontal) / (range * (1 - K.FADE_FROM))
 				alpha = math.floor(alpha * 20 + 0.5) / 20
 				local s = cam.world2Screen(api.type.Vec3f.new(ic.x, ic.y, z))
-				local fx = (s.x + ic.shift * REPLACED_SHIFT * px) / w
+				local fx = (s.x + ic.shift * K.REPLACED_SHIFT * px) / w
 				local fy = s.y / h
 				if alpha > 0 and fx >= 0 and fx <= 1 and fy >= 0 and fy <= 1 then
 					placed[#placed + 1] = { x = fx, y = fy, size = px, alpha = alpha, kind = ic.kind, cross = ic.cross }
@@ -2208,8 +2211,8 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	-- The bulldozer's highlight look: the engine draws it; its colour is the game's
 	-- construction_colors.gres Bulldozer (gold #FFD700, its selection circle at 0.75 opacity).
 	local function highlight(i, p)
-		local box = math.floor(p.size * HIGHLIGHT_PAD + 0.5)
-		local w = HIGHLIGHT_WIDTH
+		local box = math.floor(p.size * K.HIGHLIGHT_PAD + 0.5)
+		local w = K.HIGHLIGHT_WIDTH
 		children[#children + 1] = builtin.FloatingLayoutChild{
 			localKey = "icon" .. i .. "highlight",
 			h = p.x,
@@ -2220,8 +2223,8 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 					styleSheet = styleutil.makeStyle{
 						anchorPoint = { 0.5, 0.5 },
 						size = { box, box },
-						backgroundColor = color_util.withTransparency(constructionColors.Bulldozer, HIGHLIGHT_FILL * p.alpha),
-						borderColor = color_util.withTransparency(constructionColors.Bulldozer, HIGHLIGHT_BORDER * p.alpha),
+						backgroundColor = color_util.withTransparency(constructionColors.Bulldozer, K.HIGHLIGHT_FILL * p.alpha),
+						borderColor = color_util.withTransparency(constructionColors.Bulldozer, K.HIGHLIGHT_BORDER * p.alpha),
 						borderWidth = { w, w, w, w },
 					},
 				},
@@ -2316,7 +2319,7 @@ end
 
 local function removeAll()
 	local nodes = uninstallCounts()
-	local base, refused = TAKEN_OFF_TYPE, 0
+	local base, refused = K.TAKEN_OFF_TYPE, 0
 	for _, node in ipairs(nodes) do
 		local ok, err = pcall(function()
 			local cfg = api.engine.getComponent(node, CT.BASE_NODE_CONFIG)
@@ -2343,12 +2346,12 @@ local function removeAll()
 			ids = ids + #list
 		end
 	end
-	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME, { kind = "reset" }))
+	api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(K.SIGN_GAME_SCRIPT, K.SIGN_EVENT_ID, K.SIGN_EVENT_NAME, { kind = "reset" }))
 	configuredChanged()
 	log("uninstall: %d junctions, %d signs", #nodes, ids)
 end
 
-local UNINSTALL_RECOUNT = 60 -- steps between counts while the window is open
+K.UNINSTALL_RECOUNT = 60 -- steps between counts while the window is open
 
 -- Placeholders (priority road 55, 2026-10-21; user: a universal cleanup, two steps like Traffic
 -- Light Tools' Remove all): every asset group in the world whose models are all placeholders.
@@ -2357,9 +2360,9 @@ local UNINSTALL_RECOUNT = 60 -- steps between counts while the window is open
 -- back to the model they replace, so this takes every mod's, not just ours. Asset groups can't be
 -- looped over: the world is searched with the octree (one box over everything). A group holding
 -- placeholders among real models (e.g. a forest with one missing tree model) is only counted.
-local PLACEHOLDER_PREFIX = "::/placeholders/"
-local WORLD_EXTENT = 100000 -- m, half the search box's side; far beyond any map
-local REMOVE_BATCH = 200    -- asset groups per removal command
+K.PLACEHOLDER_PREFIX = "::/placeholders/"
+K.WORLD_EXTENT = 100000 -- m, half the search box's side; far beyond any map
+K.REMOVE_BATCH = 200    -- asset groups per removal command
 local placeholders = { ids = nil, mixed = 0, error = nil } -- the last search (GUI module state)
 
 local function findPlaceholders()
@@ -2369,7 +2372,7 @@ local function findPlaceholders()
 		if v == nil then
 			local name = ""
 			pcall(function() name = tostring(api.res.modelRep.getName(modelId)) end)
-			v = name:sub(1, #PLACEHOLDER_PREFIX) == PLACEHOLDER_PREFIX
+			v = name:sub(1, #K.PLACEHOLDER_PREFIX) == K.PLACEHOLDER_PREFIX
 			isPlaceholder[modelId] = v
 		end
 		return v
@@ -2396,8 +2399,8 @@ local function findPlaceholders()
 		end
 	end
 	if not box then error("no bounding box to borrow") end
-	box.min = api.type.Vec3f.new(-WORLD_EXTENT, -WORLD_EXTENT, -WORLD_EXTENT)
-	box.max = api.type.Vec3f.new(WORLD_EXTENT, WORLD_EXTENT, WORLD_EXTENT)
+	box.min = api.type.Vec3f.new(-K.WORLD_EXTENT, -K.WORLD_EXTENT, -K.WORLD_EXTENT)
+	box.max = api.type.Vec3f.new(K.WORLD_EXTENT, K.WORLD_EXTENT, K.WORLD_EXTENT)
 	api.engine.system.octreeSystem.findIntersectingEntities(box, function(entity)
 		if seen[entity] then return end
 		seen[entity] = true
@@ -2424,9 +2427,9 @@ local function findPlaceholders()
 end
 
 local function removePlaceholders(ids)
-	for i = 1, #ids, REMOVE_BATCH do
+	for i = 1, #ids, K.REMOVE_BATCH do
 		local list = {}
-		for k = i, math.min(#ids, i + REMOVE_BATCH - 1) do
+		for k = i, math.min(#ids, i + K.REMOVE_BATCH - 1) do
 			if api.engine.entityExists(ids[k]) then list[#list + 1] = ids[k] end
 		end
 		if #list > 0 then
@@ -2446,7 +2449,7 @@ local UninstallContent = react.RegisterRecipe("ImsvaleRoadPriorityUninstallConte
 	react.onStep(function()
 		local n = steps:get()
 		steps:set(n + 1)
-		if n % UNINSTALL_RECOUNT ~= 0 then return end
+		if n % K.UNINSTALL_RECOUNT ~= 0 then return end
 		local ok, nodes, signs = pcall(uninstallCounts)
 		if ok then
 			local c = { junctions = #nodes, signs = signs }
@@ -2573,16 +2576,16 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 	local function currentStyle()
 		local raw = nil
-		pcall(function() raw = panel(params)[SIGN_STYLE_PARAM] end)
-		return SIGN_STYLES[raw] or SIGN_STYLES[1], raw
+		pcall(function() raw = panel(params)[K.SIGN_STYLE_PARAM] end)
+		return K.SIGN_STYLES[raw] or K.SIGN_STYLES[1], raw
 	end
 
 	local function laneSettings()
 		local cur = {}
 		pcall(function() cur = panel(params) end)
 		-- (a value not seen yet, after a UI reload, counts as the default: ticked for overwrite)
-		return { overwrite = cur[LANE_PARAM] ~= 1, dedicated = cur[DEDICATED_PARAM] == 2,
-			exitStyle = cur[EXIT_PARAM] == 2 and "B" or "A" }
+		return { overwrite = cur[K.LANE_PARAM] ~= 1, dedicated = cur[K.DEDICATED_PARAM] == 2,
+			exitStyle = cur[K.EXIT_PARAM] == 2 and "B" or "A" }
 	end
 
 	-- The game opens the tool's info callout whenever a parameter in the menu's list changes
@@ -2622,7 +2625,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			diamondWatch.key, diamondWatch.steps = key, 0
 		elseif diamondWatch.steps then
 			diamondWatch.steps = diamondWatch.steps + 1
-			if diamondWatch.steps >= DIAMOND_REBUILD_STEPS then
+			if diamondWatch.steps >= K.DIAMOND_REBUILD_STEPS then
 				diamondWatch.steps = nil
 				local ok, err = pcall(rebuildAllDiamonds)
 				if not ok then log("rebuild failed: %s", tostring(err)) end
@@ -2724,13 +2727,13 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		local children = {}
 		if plan then
 			local edges = {}
-			local blue = color_util.withTransparency(LINE_PRIORITY, LINE_ALPHA)
-			local red = color_util.withTransparency(LINE_YIELD, LINE_ALPHA)
-			local removing = color_util.withTransparency(LINE_REMOVE, LINE_ALPHA)
+			local blue = color_util.withTransparency(K.LINE_PRIORITY, K.LINE_ALPHA)
+			local red = color_util.withTransparency(K.LINE_YIELD, K.LINE_ALPHA)
+			local removing = color_util.withTransparency(K.LINE_REMOVE, K.LINE_ALPHA)
 			for _, s in ipairs(plan.remove and (plan.removeSegs or {}) or plan.segs) do
 				local e = builtin.type.EdgeRenderable.Edge.new(segmentGeometry(s))
 				e.colors = { plan.remove and removing or blue }
-				e.width = LINE_WIDTH
+				e.width = K.LINE_WIDTH
 				e.offsetZ = 0.5
 				e.stepSize = 2
 				edges[#edges + 1] = e
@@ -2739,7 +2742,7 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				for _, s in ipairs(plan.yieldSegs) do
 					local e = builtin.type.EdgeRenderable.Edge.new(segmentGeometry(s))
 					e.colors = { red }
-					e.width = LINE_WIDTH
+					e.width = K.LINE_WIDTH
 					e.offsetZ = 0.5
 					e.stepSize = 2
 					edges[#edges + 1] = e
@@ -2904,18 +2907,18 @@ end)
 --   road 46).
 -- Without roadEnds (a repair finding no side road left) they stay.
 -- Road edits: the watcher's state (FollowRoadEdits below; repair checks `handed`).
-local FOLLOW_EVERY = 30
+K.FOLLOW_EVERY = 30
 -- After a hand-over, wait this many steps before the next: a repair's commands and sign
 -- placements answer asynchronously, and a drop handed over meanwhile (the junction bulldozed
 -- right after an edit) raced it: the repair put signs back after the drop had cleared them
 -- (priority road 46, 2026-10-20).
-local FOLLOW_SETTLE = 120
+K.FOLLOW_SETTLE = 120
 local follow = { steps = 0, handed = {}, seq = {}, settle = 0 } -- GUI module state
 
 -- The junctions registered in the game script's state, by node (string keys).
 local function registeredJunctions()
 	local ok, j = pcall(function()
-		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(SIGN_GAME_SCRIPT)
+		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(K.SIGN_GAME_SCRIPT)
 		local comp = entity and api.engine.getComponent(entity, CT.GAME_SCRIPT)
 		return comp and comp.state and comp.state.junctions
 	end)
@@ -3017,7 +3020,7 @@ local function drop(node, why, typeId, roadEnds, segs)
 			if cfg and typeId and cfg.trafficLightConfig.trafficLightType == typeId then
 				local tl = cfg.trafficLightConfig:clone()
 				tl.states = {}
-				tl.trafficLightType = TAKEN_OFF_TYPE
+				tl.trafficLightType = K.TAKEN_OFF_TYPE
 				send(node, tl, takenOffPreference(node, cfg), function(success)
 					if not success then log("follow road edits: node %d: light removal refused", node) end
 				end)
@@ -3091,7 +3094,7 @@ local function repair(todo)
 				local plan = { junctions = { j }, round = item.round or false, typeId = typeId, remove = false }
 				local lanes = { overwrite = settings.overwrite == true, dedicated = settings.dedicated == true,
 					exitStyle = settings.exitStyle == "B" and "B" or "A" }
-				local style = settings.style or SIGN_STYLES[1]
+				local style = settings.style or K.SIGN_STYLES[1]
 				apply(plan, function(okCount)
 					log("follow road edits: node %d %s", node, okCount > 0 and "repaired" or "repair refused")
 					-- Signs only for a repair that went through and wasn't overtaken by a later
@@ -3137,7 +3140,7 @@ local function checkSignsAt(node)
 	redoRoadDiamonds(roads, true)
 end
 
--- Signs held back before SIGN_YEAR (signsAllowed) are placed once the year comes: every registered
+-- Signs held back before K.SIGN_YEAR (signsAllowed) are placed once the year comes: every registered
 -- junction without stored yield signs gets them, and the roads through them their priority signs.
 -- FollowRoadEdits calls this until signs are allowed; then it runs once and not again this session.
 local signCatchUp = { done = false } -- GUI module state
@@ -3155,7 +3158,7 @@ local function catchUpSigns()
 				if role == "yield" then segs[#segs + 1] = seg end
 			end
 			local settings = type(j.settings) == "table" and j.settings or {}
-			local style, round = settings.style or SIGN_STYLES[1], j.round or false
+			local style, round = settings.style or K.SIGN_STYLES[1], j.round or false
 			placeSigns(node, segs, style, round, function(ids)
 				storeSigns(node, ids, style, round)
 			end)
@@ -3164,12 +3167,12 @@ local function catchUpSigns()
 		end
 	end
 	if count == 0 then return end
-	log("signs from %d: placing them at %d junctions", SIGN_YEAR, count)
+	log("signs from %d: placing them at %d junctions", K.SIGN_YEAR, count)
 	redoRoadDiamonds(roads)
 end
 
 -- Mounted for the whole session through the game's ModEntryPointExtension (plugin resource
--- gui/imsvale_follow_road_edits.res.lua), whether or not the tool is open. Every FOLLOW_EVERY steps
+-- gui/imsvale_follow_road_edits.res.lua), whether or not the tool is open. Every K.FOLLOW_EVERY steps
 -- it reads the yield game script's state and hands marked junctions to repair(), each once per
 -- session and mark (a junction marked `gone` while its repair was under way is handed over
 -- again; priority road 46). repair re-registers or unregisters them, which clears the mark:
@@ -3178,7 +3181,7 @@ end
 -- code (2026-10-20).
 local function followRoadEdits()
 	local ok, s = pcall(function()
-		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(SIGN_GAME_SCRIPT)
+		local entity = api.engine.system.gameScriptSystem.getEntityForGameScript(K.SIGN_GAME_SCRIPT)
 		local comp = entity and api.engine.getComponent(entity, CT.GAME_SCRIPT)
 		return comp and comp.state
 	end)
@@ -3200,7 +3203,7 @@ local function followRoadEdits()
 		if not marked(s.junctions[key]) then follow.handed[key], follow.seq[key] = nil, nil end
 	end
 	if #todo > 0 then
-		follow.settle = FOLLOW_SETTLE
+		follow.settle = K.FOLLOW_SETTLE
 		local rOk, err = pcall(repair, todo)
 		if not rOk then log("follow road edits: repair failed: %s", tostring(err)) end
 		return -- sign checks after the repairs have settled
@@ -3213,9 +3216,9 @@ local function followRoadEdits()
 			local cOk, cErr = pcall(checkSignsAt, node)
 			if not cOk then log("priority signs at new junction %d: %s", node, tostring(cErr)) end
 		end
-		api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(SIGN_GAME_SCRIPT, SIGN_EVENT_ID, SIGN_EVENT_NAME,
+		api.cmd.sendCommand(api.cmd.makeScriptingSendEventCmd(K.SIGN_GAME_SCRIPT, K.SIGN_EVENT_ID, K.SIGN_EVENT_NAME,
 			{ kind = "signCheck", node = key }))
-		follow.settle = FOLLOW_SETTLE
+		follow.settle = K.FOLLOW_SETTLE
 		return -- one at a time, so their sign builds don't race
 	end
 end
@@ -3227,12 +3230,12 @@ if entryOk and mod_entry_point and mod_entry_point.ModEntryPointExtension then
 		react.onStep(function()
 			follow.steps = follow.steps + 1
 			if follow.settle > 0 then follow.settle = follow.settle - 1 return end
-			if follow.steps < FOLLOW_EVERY then return end
+			if follow.steps < K.FOLLOW_EVERY then return end
 			follow.steps = 0
 			followRoadEdits()
 			if not signCatchUp.done then
 				local ok, err = pcall(catchUpSigns)
-				if not ok then log("signs from %d: %s", SIGN_YEAR, tostring(err)) end
+				if not ok then log("signs from %d: %s", K.SIGN_YEAR, tostring(err)) end
 			end
 		end)
 		return nil
@@ -3256,8 +3259,8 @@ local function getDefinition(constructionDefinition, _repository, _params)
 		availability = { yearFrom = 0, yearTo = 0 },
 		params = {
 			{
-				group = SECTION_PARAM,
-				key = SECTION_PARAM,
+				group = K.SECTION_PARAM,
+				key = K.SECTION_PARAM,
 				name = "Section",
 				values = {
 					"::/gui/main/icons/symbol_gear_28.tga",
@@ -3275,8 +3278,8 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				preserveValueInAllCategories = true,
 			},
 			{
-				group = SIGN_STYLE_PARAM,
-				key = SIGN_STYLE_PARAM,
+				group = K.SIGN_STYLE_PARAM,
+				key = K.SIGN_STYLE_PARAM,
 				name = "Sign style",
 				values = { "International", "Norwegian" },
 				defaultIndex = 1,
@@ -3290,8 +3293,8 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				checkEnabledFn = inSection("general"),
 			},
 			{
-				group = LANE_PARAM,
-				key = LANE_PARAM,
+				group = K.LANE_PARAM,
+				key = K.LANE_PARAM,
 				name = "Overwrite lanes",
 				values = { "Yes" },
 				defaultIndex = 2, -- ticked
@@ -3304,8 +3307,8 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				checkEnabledFn = inSection("general"),
 			},
 			{
-				group = DEDICATED_PARAM,
-				key = DEDICATED_PARAM,
+				group = K.DEDICATED_PARAM,
+				key = K.DEDICATED_PARAM,
 				name = "Dedicated turn lanes",
 				values = { "Yes" },
 				defaultIndex = 1,
@@ -3318,8 +3321,8 @@ local function getDefinition(constructionDefinition, _repository, _params)
 				checkEnabledFn = inSection("general"),
 			},
 			{
-				group = EXIT_PARAM,
-				key = EXIT_PARAM,
+				group = K.EXIT_PARAM,
+				key = K.EXIT_PARAM,
 				name = "Roundabout exit",
 				values = { "Style A", "Style B" },
 				tooltips = { "Exit from right lane only", "More exit lanes" },
