@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 109 (gamepad: apply with IA_APPLY, back with IA_MENU_BACK)"
+local VERSION = "priority road 110 (gamepad: the settings panels on Y and LB+Y)"
 local CT = api.type.ComponentType
 
 -- Phase plans and phase building, shared with the yield game script ("Follow lane edits").
@@ -2655,6 +2655,15 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 			return a ~= nil and a.can()
 		end))
 		react.useInputAction("IA_MENU_BACK", react.iaHandler(function() params.abort() end))
+		-- The construction menu's two settings panels (Y and LB+Y on a controller), which a tool
+		-- has to pass on itself, as the game's construction tools do (construction_react_util,
+		-- "open_bottom_bar" / "open_params_window"; user, 2026-11-16).
+		react.useInputAction("IA_OPTION2", react.iaHandler(function()
+			react.fireEvent(nil, "constructionMenuToggleBottomBarFocus")
+		end))
+		react.useInputAction("IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", react.iaHandler(function()
+			react.fireEvent(nil, "constructionMenuToggleParamsFocus")
+		end))
 	end
 
 	local function actionFn()
