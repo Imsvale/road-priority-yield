@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 137 (Uninstall window: closable and movable left out with a controller)"
+local VERSION = "priority road 138 (Uninstall window: closable / movable left out on a console, api.util.isConsoleMode)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2539,25 +2539,33 @@ end)
 -- toggles it, its X clears it), `open` whether it's up.
 local uninstall = { wanted = false, open = false, wc = nil, refocus = false } -- refocus: hand the controller back to the tool (PadFocus)
 
+-- The window keys a console's window lacks: left out on a console (api.util.isConsoleMode, the
+-- game's own check, game.tl), whatever the input (a PS5 may have a mouse plugged in), and on PC
+-- in gamepad mode, where the X is hidden anyway. On a PS5, closable failed: "Could not assign
+-- value to userdata 'closable'" (react.lua makeUserdata, which errors on any key the engine
+-- object lacks; player's report on 1.0.2, 2026-11-16; the player: the console's window has no
+-- such field). movable too: makeUserdata stops at the first failing key, in no set order.
+local function windowExtras()
+	local console = false
+	pcall(function() console = api.util.isConsoleMode() == true end)
+	return not console and not gamepadMode()
+end
+
 local UninstallWindow = react.RegisterWrapperRecipe("ImsvaleRoadPriorityUninstallWindow", builtin.Window, function(param)
+	local extras = windowExtras()
 	return builtin.Window{
 		-- Opened by the Uninstall button, so its X closes it (86 had none: its switch was a checkbox
 		-- the tool couldn't untick).
 		meta = { class = "imsvale-uninstall" },
 		title = "Uninstall",
-		-- With a controller the key is left out (nil: makeUserdata skips it): on a PS5 assigning it
-		-- failed, "Could not assign value to userdata 'closable'" (react.lua makeUserdata, whose
-		-- PC version notes "this causes an error if the key doesn't exist!"; player's report on
-		-- 1.0.2, 2026-11-16). The console's window may have no such field at all, so false could
-		-- fail as true did. B closes the window; on PC with a controller its X was hidden anyway.
-		closable = (not gamepadMode()) and true or nil,
+		-- left out (nil: makeUserdata skips it) on a console and with a controller: windowExtras.
+		-- B / Escape closes the window there.
+		closable = extras and true or nil,
 		onClose = function()
 			uninstall.wanted = false
 			uninstall.refocus = true
 		end,
-		-- movable left out with a controller too: makeUserdata stops at the first key that fails,
-		-- in no set order, so this one may be next on a console; it means nothing without a mouse
-		movable = (not gamepadMode()) and true or nil,
+		movable = extras and true or nil,
 		content = UninstallContent{},
 	}
 end)
