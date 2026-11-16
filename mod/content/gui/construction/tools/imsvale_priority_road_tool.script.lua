@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 133 (legend: (Hold) One Junction, (Hold) Whole Road)"
+local VERSION = "priority road 134 (the legend with a mouse too)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2734,6 +2734,17 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		react.useInputAction("IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION", react.iaHandler(function()
 			react.fireEvent(nil, "constructionMenuToggleParamsFocus")
 		end, nil, "Settings"))
+	end
+	if not pad and params.isActive then
+		-- The legend with a mouse too (priority road 134; the stylesheet's shared rule): the hold
+		-- modes and Back. Labels only for the modifiers, as with a controller; Back leaves the
+		-- construction menu, as onBack does with a mouse. (The legend didn't show with this tool
+		-- before: no rule and no handlers, not the full-screen layer as once thought.)
+		react.useInputAction("IA_PRECISION_MODE", react.iaHandler(function() end, nil, "(Hold) One Junction"))
+		react.useInputAction("IA_SECONDARY_MODE", react.iaHandler(function() end, nil, "(Hold) Whole Road"))
+		react.useInputAction("IA_MENU_BACK", react.iaHandler(function()
+			react.fireEvent(nil, "constructionMenuQuit", nil)
+		end, nil, "Back"))
 	end
 	if pad and inWorld then
 		-- The two modifiers are polled (shiftHeld, ctrlHeld); these handlers do nothing but give the
