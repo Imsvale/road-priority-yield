@@ -2109,6 +2109,8 @@ local toggleUninstall -- (): opens or closes the Uninstall window; defined with 
 -- right corner in 91-122 (settingsCorner); the button is a parameter in the panel now.
 K.SETTINGS_WINDOW_ID = "menu.construction.params.react"
 
+local diag = { frame = 0, seen = nil, hint = nil, sizes = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
+
 -- The LB+Y key hint at the Settings window (a controller), where the game puts it for its own
 -- tools: the window adds a KeybindingHintDisplay for IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION to its own
 -- layout for each of the game's tools (construction.tl, ConstructionParamsWindow,
@@ -2145,7 +2147,6 @@ local function settingsHint()
 	return x / w, (top - 6) / h
 end
 
-local diag = { frame = 0, seen = nil, hint = nil, sizes = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
 
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
 	react.setMouseTransparent(true)
