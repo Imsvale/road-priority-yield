@@ -55,10 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
--- TEMPORARY (2026-11-16): true leaves out the icon overlay and the Uninstall button (a test).
-local TEST_NO_OVERLAY = true
-local TEST_NO_PARAMS = false -- TEMPORARY (2026-11-16): the tool without settings (a test)
-local VERSION = "priority road 119 (controller legend in the game's format; TEST: no overlay)"
+local VERSION = "priority road 120 (overlay back; the LB+Y hint at the Settings window)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2137,6 +2134,32 @@ local function settingsCorner()
 	if not visible then return nil end
 	return cx, cy
 end
+-- The LB+Y key hint at the Settings window (a controller), where the game puts it for its own
+-- tools: the window adds a KeybindingHintDisplay for IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION to its own
+-- layout for each of the game's tools (construction.tl, ConstructionParamsWindow,
+-- keyhintActionSourceIds), shown while that tool registers the action. A custom tool isn't among
+-- them, so ours is drawn here with the tool's recipe as its source, placed by the same numbers:
+-- the window (construction.css.lua, Window!construct-settings) 400 px wide, margin right 20 and
+-- bottom 360, growing upward; the hint (Window#menu.construction.params.react!construct-settings
+-- KeybindingHintDisplay!overflow-mode) at a tenth of the window's width, its bottom centre 6 px
+-- above the window's layout. The window's height from api.gui.byId.getSize (fractions of the
+-- screen, frame and shadow included: K.SETTINGS_FRAME px of them). Pixels at UI scale 1, as
+-- settingsCorner. Fractions of the screen, nil while the window isn't visible.
+K.SETTINGS_FRAME = 20 -- px of frame and shadow in the window's getSize (420 for 400 wide; the height taken alike)
+local function settingsHint()
+	local visible = false
+	pcall(function() visible = api.gui.byId.isVisible(K.SETTINGS_WINDOW_ID) end)
+	if not visible then return nil end
+	local size = api.gui.camera.getSize()
+	local w, h = math.max(size.x, 1), math.max(size.y, 1)
+	local sy = nil
+	pcall(function() sy = api.gui.byId.getSize(K.SETTINGS_WINDOW_ID).y end)
+	if not sy then return nil end
+	local top = h - 360 - (sy * h - K.SETTINGS_FRAME)
+	local x = w - 20 - 400 + 0.1 * 400
+	return x / w, (top - 6) / h
+end
+
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
 	react.setMouseTransparent(true)
 
@@ -2250,6 +2273,22 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 	-- The Uninstall button, under the Settings window's bottom right corner (see toggleUninstall).
 	-- Not mouse-transparent, unlike the icons: it takes its clicks.
 	local cx, cy = settingsCorner()
+	-- The LB+Y hint (see settingsHint), with a controller only (hintSource).
+	if param.hintSource then
+		local hx, hy = settingsHint()
+		if hx then
+			children[#children + 1] = builtin.FloatingLayoutChild{
+				localKey = "settingsHint",
+				h = hx,
+				v = hy,
+				item = builtin.KeybindingHintDisplay{
+					meta = { styleSheet = styleutil.makeStyle{ anchorPoint = { 0.5, 1.0 } } },
+					source = param.hintSource,
+					inputAction = "IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION",
+				},
+			}
+		end
+	end
 	if cx and toggleUninstall then
 		children[#children + 1] = builtin.FloatingLayoutChild{
 			localKey = "uninstallButton",
@@ -2665,6 +2704,8 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 
 	-- Gamepad: what the action's click does, set by the action each redraw (see gamepadMode).
 	local gamepad = engine_react_util.useStepState(gamepadMode)
+	-- This recipe registers LB+Y: the source of its key hint at the Settings window (IconOverlay).
+	local selfRef = react.useSelfRef()
 	local applyRef = react.useRef(nil)
 	-- With a controller the menu drops isActive the frame after A activates the tool, while the
 	-- tool's action stays mounted (its preview went on): there the tool counts as live while its
@@ -2810,15 +2851,11 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 				for _, ic in ipairs(plan.icons or {}) do planIcons[#planIcons + 1] = ic end
 			end
 		end
-		-- TEMPORARY (2026-11-16): the overlay (icons, Uninstall button) left out, to see whether the
-		-- full-screen layer blocks the controller's buttons.
-		if not TEST_NO_OVERLAY then
 		children[#children + 1] = builtin.FullScreenComponent{
 			recipe = IconOverlay,
 			param = { planIcons = planIcons, planNodes = plan and plan.nodes or {},
-				gameCtx = params.gameCtx },
+				gameCtx = params.gameCtx, hintSource = gamepad:old() and selfRef or nil },
 		}
-		end
 
 		-- No hover outline: the lines above show what a click does (user, 2026-10-21).
 		local none = color_util.withTransparency(constructionColors.Modifier.Valid, 0)
@@ -3403,9 +3440,6 @@ local function getDefinition(constructionDefinition, _repository, _params)
 			},
 		},
 	}
-	-- TEMPORARY (2026-11-16): no settings, as the game's custom tools have none, to see whether
-	-- the settings panel is what deactivates the tool on a controller the frame after A.
-	if TEST_NO_PARAMS then def.params = {} end
 	return def
 end
 
