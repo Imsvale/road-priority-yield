@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 126 (TEST: a text marker where the LB+Y hint should be)"
+local VERSION = "priority road 127 (TEST: hint marker; log the Settings window and content sizes)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2130,12 +2130,22 @@ local function settingsHint()
 	local sy = nil
 	pcall(function() sy = api.gui.byId.getSize(K.SETTINGS_WINDOW_ID).y end)
 	if not sy then return nil end
+	-- (diagnostics, 2026-11-16: the window's getSize height isn't its drawn height; the marker sat
+	-- at the top of the screen while the window's top was at about y 415 of 1080)
+	local cs = nil
+	pcall(function() cs = api.gui.byId.getSize("menu.construction.params.content.react") end)
+	local line = string.format("settings sizes: window %.4f, content %s x %s (screen %d x %d)", sy,
+		cs and string.format("%.4f", cs.x) or "-", cs and string.format("%.4f", cs.y) or "-", w, h)
+	if line ~= diag.sizes then
+		diag.sizes = line
+		log("%s", line)
+	end
 	local top = h - 360 - (sy * h - K.SETTINGS_FRAME)
 	local x = w - 20 - 400 + 0.1 * 400
 	return x / w, (top - 6) / h
 end
 
-local diag = { frame = 0, seen = nil, hint = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
+local diag = { frame = 0, seen = nil, hint = nil, sizes = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
 
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
 	react.setMouseTransparent(true)
