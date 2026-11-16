@@ -2160,6 +2160,8 @@ local function settingsHint()
 	return x / w, (top - 6) / h
 end
 
+local diag = { frame = 0, seen = nil, hint = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
+
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
 	react.setMouseTransparent(true)
 
@@ -2318,7 +2320,6 @@ local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(pa
 end)
 
 local lastStyle = nil -- the drop-down's value last seen (GUI module state)
-local diag = { frame = 0, seen = nil, hint = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
 -- The panel's values as last seen, per key (GUI module state). getCurrentParams() leaves out the
 -- parameters hidden by the tabs (construction.tl getCurrentValues(false)), so a setting on another
 -- tab read as missing: applying from the Roundabouts tab took "Overwrite lanes" as unticked
