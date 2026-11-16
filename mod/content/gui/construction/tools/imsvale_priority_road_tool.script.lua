@@ -55,7 +55,7 @@ local construction_react_util = ug_require "::/gui/construction/construction_rea
 local styleutil = ug_require "::/gui/main/styleutil.tl"
 local engine_react_util = ug_require "::/gui/main/engine_react_util.tl"
 
-local VERSION = "priority road 131 (the LB+Y hint by sourceId; test marker and diagnostics removed)"
+local VERSION = "priority road 132 (the LB+Y hint follows the UI scale; Back with a mouse leaves the tool; diagnostics removed)"
 local CT = api.type.ComponentType
 -- Constants, in one table: the main chunk is near Lua's limit of 200 locals (the game adds a few;
 -- priority road 112 failed to load, "too many local variables", at 199).
@@ -2109,7 +2109,6 @@ local toggleUninstall -- (): opens or closes the Uninstall window; defined with 
 -- right corner in 91-122 (settingsCorner); the button is a parameter in the panel now.
 K.SETTINGS_WINDOW_ID = "menu.construction.params.react"
 
-local diag = { frame = 0, seen = nil } -- gamepad diagnostics: frames counted, isActive / gamepad last logged
 
 -- The LB+Y key hint at the Settings window (a controller), where the game puts it for its own
 -- tools: the window adds a KeybindingHintDisplay for IA_TOGGLE_MOD_SETTINGS_CONSTRUCTION to its own
@@ -2119,12 +2118,18 @@ local diag = { frame = 0, seen = nil } -- gamepad diagnostics: frames counted, i
 -- the window (construction.css.lua, Window!construct-settings) 400 px wide, margin right 20 and
 -- bottom 360, growing upward; the hint (Window#menu.construction.params.react!construct-settings
 -- KeybindingHintDisplay!overflow-mode) at a tenth of the window's width, its bottom just above
--- the window's top. Pixels at UI scale 1. Fractions of the screen, nil while the window isn't
--- visible or its content not laid out yet.
+-- the window's top. The stylesheet's pixels times the UI scale (below). Fractions of the screen,
+-- nil while the window isn't visible or its content not laid out yet.
 -- The window's height: its content's (id menu.construction.params.content.react) plus
 -- K.SETTINGS_FRAME. The window's own getSize is its content's plus a fixed 0.3944 of the screen
 -- (426 px at 1080) that isn't drawn (priority road 127, two tabs: 0.6630 / 0.2685 and 0.4852 /
 -- 0.0907): taken from it, the hint sat at the screen's top edge, hidden (120-126).
+-- UI scale: no API gives it, nor a window's position. The content is measured anyway, and at UI
+-- scale 1 it's K.SETTINGS_CONTENT_W px wide (0.2000 of 1920, 2026-11-16); its measured width over
+-- that is the scale the game draws at, whatever the resolution or the setting, and every
+-- stylesheet number below is multiplied by it (user's screenshot at a smaller UI scale: the hint
+-- sat far above and left of the window, 2026-11-16).
+K.SETTINGS_CONTENT_W = 384 -- px: the content's width at UI scale 1 (the 400 px window less its frame)
 K.SETTINGS_FRAME = 15 -- px the drawn window is taller than its content (305 for 290, 114 for 98; 2026-11-16)
 K.HINT_GAP = 3 -- px between the hint's bottom and the window's top (the game's roundabout tool, user's screenshot)
 local function settingsHint()
@@ -2133,12 +2138,13 @@ local function settingsHint()
 	if not visible then return nil end
 	local size = api.gui.camera.getSize()
 	local w, h = math.max(size.x, 1), math.max(size.y, 1)
-	local cy = nil
-	pcall(function() cy = api.gui.byId.getSize("menu.construction.params.content.react").y end)
-	if not cy or cy <= 0 then return nil end
-	local top = h - 360 - (cy * h + K.SETTINGS_FRAME)
-	local x = w - 20 - 400 + 0.1 * 400
-	return x / w, (top - K.HINT_GAP) / h
+	local cs = nil
+	pcall(function() cs = api.gui.byId.getSize("menu.construction.params.content.react") end)
+	if not cs or cs.x <= 0 or cs.y <= 0 then return nil end
+	local scale = cs.x * w / K.SETTINGS_CONTENT_W
+	local top = h - 360 * scale - (cs.y * h + K.SETTINGS_FRAME * scale)
+	local x = w - (20 + 400) * scale + 0.1 * 400 * scale
+	return x / w, (top - K.HINT_GAP * scale) / h
 end
 
 local IconOverlay = react.RegisterRecipe("ImsvaleRoadPriorityIcons", function(param)
@@ -2612,7 +2618,6 @@ local PadFocus = react.RegisterRecipe("ImsvalePriorityRoadPadFocus", function(pa
 			n:focus()
 			param.want:set(false)
 			uninstall.refocus = false
-			log("frame %d: focus taken", diag.frame)
 		end
 	end)
 end)
@@ -2699,28 +2704,17 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 	-- action is mounted. The menu's focus mode ("Action", "BottomBar", "Params": Y and LB+Y switch,
 	-- construction.tl) decides whether the tool or a settings panel has the controller.
 	react.onEvent(K.UNINSTALL_EVENT, function()
-		log("Uninstall: button")
 		toggleUninstall()
 	end)
 	local mounted = react.useState(false)
 	local focusMode = react.useState("Action")
 	local wantFocus = react.useRef(true)
 	react.onEvent("constructionMenuChangeFocusMode", function(_, value)
-		log("frame %d: focus mode %s", diag.frame, tostring(value))
 		focusMode:set(value)
 		if value == "Action" then wantFocus:set(true) end
 	end)
 
-	-- (gamepad diagnostics, 2026-11-16: what the tool sees while focus is stuck; A activated and
-	-- deactivated the tool in one frame. The menu's events, with a frame count, show who did it.)
-	react.onStep(function() diag.frame = diag.frame + 1 end)
 	local live = params.isActive or (gamepad:old() and mounted:old())
-	local seenKey = tostring(params.isActive) .. "/" .. tostring(gamepad:old()) .. "/" .. tostring(mounted:old())
-	if seenKey ~= diag.seen then
-		diag.seen = seenKey
-		log("frame %d: tool active %s, gamepad %s, action mounted %s", diag.frame, tostring(params.isActive),
-			tostring(gamepad:old()), tostring(mounted:old()))
-	end
 
 	if not live then
 		return
@@ -2747,7 +2741,6 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		react.useInputAction("IA_PRECISION_MODE", react.iaHandler(function() end, nil, "(Hold) Single Junction"))
 		react.useInputAction("IA_SECONDARY_MODE", react.iaHandler(function() end, nil, "(Hold) Infinite Reach"))
 		react.useInputAction("IA_APPLY", react.iaHandler(function()
-			log("frame %d: IA_APPLY", diag.frame)
 			local a = applyRef:get()
 			if a then a.apply() end
 			return true
@@ -2758,7 +2751,6 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		-- Back: out of the tool, into the menu. IA_CLOSE_TOPMOST_WINDOW too, which the game's
 		-- note says actions use to capture "back" before the menu's IA_MENU_BACK (construction.tl).
 		local function back()
-			log("frame %d: back", diag.frame)
 			mounted:set(false)
 			params.abort()
 		end
@@ -2962,9 +2954,17 @@ local PriorityRoadAction = react.RegisterRecipe("ImsvalePriorityRoadAction", fun
 		-- focus stayed on the tool's icon in the bottom bar, and Cross clicked the icon).
 		local pad = gamepadMode()
 		return builtin.ActionDescriptor{
+			-- Back (Escape, right-click): with a mouse out of the construction menu, as the game's
+			-- tools (its exit, constructionMenuQuit; construction_react_util: "in mouse mode, let it
+			-- fall-through so it will close the construction window"); params.abort() alone only
+			-- deactivated the menu entry, and the tool stayed (user, 2026-11-16). With a controller
+			-- back into the menu (IA_MENU_BACK above does the same).
 			onBack = function()
-				log("frame %d: onBack " .. string.char(10) .. "%s", diag.frame, debug and debug.traceback and debug.traceback() or "")
-				params.abort()
+				if gamepadMode() then
+					params.abort()
+				else
+					react.fireEvent(nil, "constructionMenuQuit", nil)
+				end
 			end,
 			children = children,
 			crosshair = pad,
